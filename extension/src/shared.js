@@ -75,6 +75,8 @@ export const DEFAULT_SETTINGS = {
   expansion: { enabled: false, targets: [] },
   // The web app (Vercel): its address and the key from its Connect page.
   web: { url: '', key: '' },
+  // Wounded troops healed in the Hospital, as resources allow.
+  heal: { enabled: false, everyMinutes: 60 },
 };
 
 export function mergeSettings(saved) {

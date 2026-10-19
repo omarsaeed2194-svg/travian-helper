@@ -75,6 +75,7 @@ export function summaryText(data, stats, now = Date.now()) {
   row('✅', 'tg.sumCompleted', stats.completed);
   row('🏗', 'tg.sumUpgrades', stats.upgrades);
   row('🛡', 'tg.sumTrained', stats.trained);
+  row('🩹', 'tg.sumHealed', stats.healed);
   row('🐎', 'tg.sumFarm', stats.farm);
   row('🌿', 'tg.sumRaids', stats.raids);
   row('⚔️', 'tg.sumAttacks', stats.attacks);

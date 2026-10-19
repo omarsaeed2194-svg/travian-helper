@@ -159,6 +159,28 @@
       return { ok: true, navigating: true };
     },
 
+    // Hospital: every wounded unit, as many as the resources allow (each
+    // box's own maximum), then the green button.
+    async heal() {
+      let total = 0;
+      const sent = {};
+      for (const input of document.querySelectorAll('.troop:not(.empty) .cta input.text[name^="t"]')) {
+        const link = input.closest('.cta').querySelector('a');
+        const max = link ? Number(String(link.textContent).replace(/[^\d]/g, '')) || 0 : 0;
+        if (max < 1 || input.disabled) continue;
+        setValue(input, max);
+        sent[input.getAttribute('name')] = max;
+        total += max;
+        await sleep(rand(150, 400));
+      }
+      if (!total) return { ok: false, code: 'nothingToHeal' };
+      const submit = document.getElementById('s1') || document.querySelector('#content form button.green[type="submit"]');
+      if (!usable(submit)) return { ok: false, code: 'noHealButton' };
+      await sleep(rand(300, 800));
+      setTimeout(() => submit.click(), 50);
+      return { ok: true, navigating: true, sent, total };
+    },
+
     async train({ field, amount }) {
       if (!/^t\d+$/.test(field)) return { ok: false, code: 'badField' };
       const input = document.querySelector(`.troop:not(.empty) .cta input.text[name="${field}"]`);

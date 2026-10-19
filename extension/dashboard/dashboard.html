@@ -230,6 +230,15 @@
         </div>
         <p class="muted small" data-i18n="troops.unitHelp"></p>
       </div>
+      <div class="panel" id="healPanel">
+        <h2 data-i18n="heal.title"></h2>
+        <div class="row wrap">
+          <label class="switch strong"><input type="checkbox" data-setting="heal.enabled"> <span data-i18n="heal.enable"></span></label>
+          <label><span data-i18n="heal.every"></span> <input type="number" min="10" max="720" data-setting="heal.everyMinutes" class="num"> <span data-i18n="troops.min"></span></label>
+        </div>
+        <p class="muted small" data-i18n="heal.help"></p>
+        <div class="table-wrap"><table class="list" id="healTable"></table></div>
+      </div>
     </section>
 
     <!-- ============================== Army: defence (escape + alliance donation) -->

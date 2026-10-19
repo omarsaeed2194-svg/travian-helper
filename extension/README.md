@@ -67,6 +67,11 @@ you're away:
 - **Troops** — the troops in each village and what the barracks, stable and
   workshop are training (with finish times), in the Overview, the Troops &
   training page and the popup.
+- **Wounded troops** *(experimental)* — in villages with a Hospital, the
+  wounded are healed as far as the resources go (each kind up to the game's
+  own "max"), every hour (you choose) and a few minutes after an attack
+  ends. The Troops & training page shows the wounded, those being healed and
+  the next look. Not yet checked against a saved Hospital page.
 - **Autopilot** — one switch for when you're away. When a village's build
   queue is empty it picks the next upgrade itself (warehouse/granary when
   90% full → crop when the village is short of crop → Main Building up to the

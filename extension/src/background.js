@@ -23,6 +23,7 @@ const LOG_LIMIT = 300;
 const PAGE_TIMEOUT_MS = 45000;
 const BUILDINGS_RESCAN_MS = 3 * 3600 * 1000;
 const STORAGE_REALERT_MS = 6 * 3600 * 1000;
+const HOSPITAL = 46;
 const MAX_BUILD_ATTEMPTS = 6;
 const HISTORY_STEP_MS = 5 * 60 * 1000;
 const HISTORY_KEEP_MS = 24 * 3600 * 1000;
@@ -191,7 +192,11 @@ async function processPage(state, tabId) {
         v.needsRefresh = true; // fetch arrival times on the next tick
         attackAlerts[vi.id] = { villageId: vi.id, kind: 'attacks', sticky: true, title: t('alert.attack.title', { v: vi.name }), body: t('alert.attack.body', { xy: coords(vi.x, vi.y) }) };
       }
-      if (!vi.underAttack && wasAttacked) events.push(['info', t('log.attackOver', { v: vi.name }), vi.id]);
+      if (!vi.underAttack && wasAttacked) {
+        events.push(['info', t('log.attackOver', { v: vi.name }), vi.id]);
+        // The battle may have left wounded: look at the Hospital soon.
+        if ((v.buildings || []).some((b) => b.gid === HOSPITAL && b.level > 0)) v.healAt = Math.min(v.healAt || Infinity, Date.now() + 3 * 60000);
+      }
       if (!vi.underAttack) v.incomingAttacks = 0;
     });
     if (listed.length) {
@@ -236,7 +241,8 @@ async function processPage(state, tabId) {
       if (state.buildPage) {
         const bp = state.buildPage;
         const slotBuilding = (v.buildings || []).find((b) => b.slot === bp.slot);
-        const gid = Number(new URL(state.url).searchParams.get('gid')) || (slotBuilding && slotBuilding.gid);
+        const gid = bp.gid || Number(new URL(state.url).searchParams.get('gid')) || (slotBuilding && slotBuilding.gid);
+        if (bp.hospital) { v.wounded = bp.hospital.map(({ unit, name, count, max }) => ({ unit, name, count, max })); v.woundedAt = now; }
         if (gid && bp.trainable && bp.trainable.length) v.units = { ...(v.units || {}), [gid]: bp.trainable.map(({ field, unit, name }) => ({ field, unit, name })) };
         if (gid && bp.trainingQueue) {
           const items = bp.trainingQueue.map((q) => ({ unit: q.unit, name: q.name, count: q.count, finishAt: q.secondsLeft != null ? now + q.secondsLeft * 1000 : null }));
@@ -982,6 +988,32 @@ const JOBS = {
     });
   },
 
+  // Hospital: heal every wounded unit the resources pay for.
+  async heal(tabId, job, s) {
+    const { villages = {} } = await read(['villages']);
+    const v = villages[job.villageId];
+    if (!v) return;
+    await patchVillage(v.id, { healAt: Date.now() + jittered(s.heal.everyMinutes * 60000, s.jitterPercent) });
+    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(v.id)}&gid=${HOSPITAL}`);
+    const list = (page.buildPage && page.buildPage.hospital) || null;
+    if (!list) throw new Error(t('err.noHospital'));
+    await patchVillage(v.id, { wounded: list.map(({ unit, name, count, max }) => ({ unit, name, count, max })), woundedAt: Date.now() });
+    if (!list.length) return;
+    if (!list.some((u) => u.max > 0)) {
+      // Wounded, but nothing affordable: say so once in a while.
+      if ((v.healNoResAt || 0) < Date.now() - 6 * 3600000) {
+        await patchVillage(v.id, { healNoResAt: Date.now() });
+        await log('info', t('log.healNoRes', { n: list.reduce((n, u) => n + (u.count || 0), 0) || '?' }), v.id);
+      }
+      return;
+    }
+    const { res } = await act(tabId, { kind: 'heal' }, true);
+    if (!res.ok) throw new Error(reasonText(res));
+    const what = list.filter((u) => res.sent && res.sent[u.field]).map((u) => `${res.sent[u.field]} × ${u.name || u.unit}`).join(t('list.sep'));
+    await log('success', t('log.healing', { what }), v.id);
+    await bump('healed', res.total || 0);
+  },
+
   // New-village plan: settlers in the village's Residence (or Palace). The
   // game offers them only while the building has a free slot.
   async settlers(tabId, job, s) {
@@ -1462,6 +1494,13 @@ function planActions(s, data, now) {
     if ((v.celebrationFailAt || 0) > now - 12 * 3600000 || (v.celebrationCheckAt || 0) > now) continue;
     const c = savingFor(v, s.culture.celebrate, now);
     if (c && !c.tooSmall && canAfford(v, c.cost, now)) jobs.push({ type: 'celebrate', villageId: v.id, kind: c.kind, label: t('job.celebrate', { v: v.name }) });
+  }
+  // Wounded troops: a look at each Hospital every so often (and soon after an attack).
+  if (s.heal.enabled) {
+    for (const v of sortedVillages(villages)) {
+      if (!(v.buildings || []).some((b) => b.gid === HOSPITAL && b.level > 0) || now < (v.healAt || 0)) continue;
+      jobs.push({ type: 'heal', villageId: v.id, label: t('job.heal', { v: v.name }) });
+    }
   }
   // New-village plan: settlers where a Residence 10 and a slot are ready.
   if (s.expansion.enabled) {

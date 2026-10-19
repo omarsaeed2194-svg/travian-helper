@@ -464,9 +464,25 @@
     const costEls = qsa(qs(contract, '.resourceWrapper'), '.resource .value');
     const title = qs(doc, '.titleInHeader') || qs(doc, 'h1');
     const lvl = qs(title, '.level');
+    const own = qs(doc, '#build');
+    const gidMatch = own && String(own.className).match(/\bgid(\d+)\b/);
     return {
       slot,
+      // The building the page is about (its address doesn't always say: a form sent there may not).
+      gid: gidMatch ? Number(gidMatch[1]) : null,
       newBuildings: qs(doc, '[id^="contract_building"]') ? parseNewBuildings(doc) : null,
+      // Hospital: wounded troops, each with how many can be healed now
+      // (its "max" link) and the count the game shows next to it.
+      hospital: qs(doc, '#build.gid46') ? qsa(doc, '.troop:not(.empty) .cta input.text[name^="t"]').map((input) => {
+        const box = input.closest('.troop');
+        const img = qs(box, 'img.unit');
+        const maxLink = qs(qs(box, '.cta'), 'a');
+        const info = text(qs(box, '.furtherInfo')).match(/\d[\d,.]*/);
+        return {
+          field: input.getAttribute('name'), unit: unitOf(img), name: img ? img.getAttribute('alt') || '' : '',
+          max: maxLink ? num(text(maxLink)) || 0 : 0, count: info ? num(info[0]) : null,
+        };
+      }) : null,
       // Town Hall: a celebration in progress shows a countdown.
       celebration: qs(doc, '#build.gid24') ? (() => {
         const timer = qs(doc, '#content table.under_progress .timer, #content .under_progress .timer, #build table .dur .timer');

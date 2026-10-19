@@ -290,6 +290,24 @@ function renderTroops(now) {
     : `<tr><td class="muted">${esc(t('troops.none'))}</td></tr>`;
 }
 
+// Hospitals: wounded seen at the last look, healing in progress, next look.
+function renderHeal(now) {
+  const villages = sortedVillages(data.villages).filter((v) => (v.buildings || []).some((b) => b.gid === 46 && b.level > 0));
+  if (!villages.length) { $('healTable').innerHTML = `<tr><td class="muted">${esc(t('heal.none'))}</td></tr>`; return; }
+  const head = ['th.village', 'heal.th.wounded', 'heal.th.healing', 'heal.th.checked', 'heal.th.next'].map((k) => `<th>${esc(t(k))}</th>`).join('');
+  const rows = villages.map((v) => {
+    const wounded = !v.woundedAt ? `<span class="muted">${esc(t('heal.notSeen'))}</span>`
+      : (v.wounded || []).length ? v.wounded.map((x) => `<span class="unit-chip">${unitIcon(x.unit)} ${esc(x.name || x.unit)} <b class="mono">${x.count ?? '?'}</b></span>`).join('')
+        : `<span class="muted">${esc(t('heal.noneWounded'))}</span>`;
+    const q = ((v.trainingQueue || {})[46] || {}).items || [];
+    const healing = q.filter((x) => !x.finishAt || x.finishAt > now);
+    const inCare = healing.length ? healing.map((x) => `<span class="unit-chip">${unitIcon(x.unit)} ${x.count} × ${esc(x.name || x.unit)} <small class="mono muted">${x.finishAt ? fmtDuration(x.finishAt - now) : ''}</small></span>`).join('') : '—';
+    const next = !data.settings.heal.enabled ? '—' : v.healAt && v.healAt > now ? fmtDuration(v.healAt - now) : t('troops.due');
+    return `<tr><td>${esc(v.name)}</td><td>${wounded}</td><td>${inCare}</td><td class="muted small">${esc(v.woundedAt ? fmtAgo(v.woundedAt, now) : '—')}</td><td class="mono">${esc(next)}</td></tr>`;
+  }).join('');
+  $('healTable').innerHTML = `<tr>${head}</tr>${rows}`;
+}
+
 $('trainVillage').addEventListener('change', render);
 $('trainBuilding').addEventListener('change', render);
 $('addTrain').addEventListener('click', () => {
@@ -468,6 +486,7 @@ function renderTicking(now) {
   renderSync(now);
   renderWeb(now);
   renderTroopTable(now);
+  renderHeal(now);
   renderHealth(data, now);
   renderCulture(data, now);
 }

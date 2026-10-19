@@ -6,13 +6,13 @@ import { leaseIsFresh } from './sync.js';
 import { t } from './i18n.js';
 
 const HOUR = 3600000;
-const JOB_TYPES = ['refresh', 'build', 'train', 'farmList', 'farm', 'raid', 'escape', 'adventure', 'scan', 'quest', 'heroBag', 'reports', 'donate', 'celebrate', 'settlers'];
+const JOB_TYPES = ['refresh', 'build', 'train', 'farmList', 'farm', 'raid', 'escape', 'adventure', 'scan', 'quest', 'heroBag', 'reports', 'donate', 'celebrate', 'settlers', 'heal'];
 
 // `tab`: the dashboard page where the thing is set up, linked from the row.
 const row = (tone, label, value, detail = '', tab = null) => ({ tone, label, value, detail, tab });
 const JOB_TAB = {
   build: 'build', train: 'troops', farmList: 'farms', farm: 'farms', raid: 'oasis', escape: 'defense', adventure: 'hero',
-  scan: 'oasis', quest: 'autopilot', heroBag: 'hero', reports: 'farms', donate: 'defense', celebrate: 'culture', settlers: 'culture',
+  scan: 'oasis', quest: 'autopilot', heroBag: 'hero', reports: 'farms', donate: 'defense', celebrate: 'culture', settlers: 'culture', heal: 'troops',
 };
 
 // "good" when everything is fine, else the worst tone found.
