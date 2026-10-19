@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Travian Helper</title>
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/app/src/ui.css">
+  <link rel="stylesheet" href="/web.css">
+</head>
+<body>
+  <main class="web-page">
+    <section class="web-card wide">
+      <h1><img src="/favicon.png" alt=""> <span data-t="title"></span></h1>
+      <p class="note" data-t="intro"></p>
+      <ol>
+        <li data-t="step1"></li>
+        <li data-t="step2"></li>
+        <li data-t="step3"></li>
+      </ol>
+      <label><span data-t="address"></span><code class="web-key" id="address"></code></label>
+      <div>
+        <p class="note" id="keyState"></p>
+        <code class="web-key" id="newKey" hidden></code>
+        <p class="note" id="keyOnce" data-t="keyOnce" hidden></p>
+      </div>
+      <div class="web-row">
+        <button class="btn primary" type="button" id="makeKey" data-t="makeKey"></button>
+        <button class="btn" type="button" id="copyKey" data-t="copy" hidden></button>
+        <a class="btn" href="/app/dashboard/dashboard.html" data-t="toDashboard"></a>
+      </div>
+      <p class="msg" id="msg" role="status"></p>
+      <p class="note" id="agent"></p>
+    </section>
+  </main>
+  <script src="/connect.js"></script>
+</body>
+</html>

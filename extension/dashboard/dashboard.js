@@ -7,6 +7,7 @@ import { renderFinder } from './finder.js';
 import { renderCulture } from './culture.js';
 import { renderEscapes } from './escape.js';
 import { leaseIsFresh } from '../src/sync.js';
+import { webBase } from '../src/web.js';
 import { unitIcon, tribeBase } from '../src/units.js';
 import {
   sortedVillages, taskLabel, buildingName, fmtDuration, fmtAgo, TRAINING_BUILDINGS, buildStatus,
@@ -382,6 +383,29 @@ function renderSync(now) {
   $('takeOver').hidden = !otherActive;
 }
 
+// Web app link: its state, and a check-in right after the address or key changes.
+function renderWeb(now) {
+  const w = data.health.web;
+  const set = data.settings.web || {};
+  const el = $('webStatus');
+  if (!set.url && !set.key) { el.textContent = t('web.notSet'); el.className = 'small muted'; return; }
+  if (!webBase(set.url)) { el.textContent = t('web.badUrl'); el.className = 'small bad'; return; }
+  if (el.dataset.busy) return;
+  el.textContent = !w ? t('web.never') : w.ok ? t('web.ok', { ago: fmtAgo(w.okAt, now) }) : t('web.failing', { e: w.err || '?', ago: fmtAgo(w.at, now) });
+  el.className = `small ${w && w.ok ? 'good-text' : w ? 'bad' : 'muted'}`;
+}
+async function webNow() {
+  const el = $('webStatus');
+  if (!webBase(data.settings.web.url) || !data.settings.web.key) return renderWeb(Date.now());
+  el.dataset.busy = '1';
+  el.textContent = t('web.checking');
+  try { await command('webSyncNow'); } catch (e) { /* shown by renderWeb */ }
+  delete el.dataset.busy;
+  renderWeb(Date.now());
+}
+$('webSyncNow').addEventListener('click', webNow);
+for (const el of document.querySelectorAll('[data-setting^="web."]')) el.addEventListener('change', () => setTimeout(webNow, 300));
+
 $('takeOver').addEventListener('click', () => command('takeOver'));
 $('syncNow').addEventListener('click', async (e) => {
   e.target.disabled = true;
@@ -442,6 +466,7 @@ function renderTicking(now) {
   renderOverview(data, now);
   renderBuildWhy(now);
   renderSync(now);
+  renderWeb(now);
   renderTroopTable(now);
   renderHealth(data, now);
   renderCulture(data, now);

@@ -522,6 +522,17 @@
           <span id="backupResult" class="small muted"></span>
         </div>
       </div>
+      <div class="panel" id="webPanel">
+        <h2 data-i18n="web.title"></h2>
+        <p class="muted small" data-i18n="web.help"></p>
+        <label class="field"><span data-i18n="web.url"></span> <input type="text" data-setting="web.url" dir="ltr" placeholder="https://travian-helper.vercel.app" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span data-i18n="web.key"></span> <input type="password" data-setting="web.key" dir="ltr" autocomplete="off"></label>
+        <div class="row wrap">
+          <button class="btn" id="webSyncNow" data-i18n="web.syncNow"></button>
+          <span id="webStatus" class="small muted"></span>
+        </div>
+        <p class="muted small" data-i18n="web.note"></p>
+      </div>
       <div class="panel">
         <h2 data-i18n="settings.server"></h2>
         <p><span id="serverFull" class="mono" dir="ltr"></span></p>

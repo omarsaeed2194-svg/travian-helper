@@ -87,6 +87,11 @@ export function healthReport(data, now = Date.now()) {
   else feat.push(row('good', 'Telegram', s.telegram.control !== false ? t('health.tgControl') : t('health.tgAlertsOnly'),
     tgH.okAt ? t('health.lastContact', { ago: fmtAgo(tgH.okAt, now) }) : '', 'alerts'));
   feat.push(row(s.discord.webhookUrl ? 'good' : 'muted', 'Discord', s.discord.webhookUrl ? t('health.on') : t('health.notSetUp'), '', 'alerts'));
+  const web = s.web || {};
+  const webH = h.web || {};
+  if (!web.url || !web.key) feat.push(row('muted', t('health.web'), t('health.notSetUp'), '', 'settings'));
+  else if (webH.at && !webH.ok) feat.push(row('bad', t('health.web'), t('health.failing'), webH.err || '', 'settings'));
+  else feat.push(row('good', t('health.web'), web.url.replace(/^https?:\/\//, ''), webH.okAt ? t('health.lastContact', { ago: fmtAgo(webH.okAt, now) }) : '', 'settings'));
   const remote = h.remote || {};
   if (remote.at && !remote.ok && now - remote.at < 24 * HOUR) feat.push(row('bad', t('health.phoneAlerts'), t('health.failing'), remote.err || '', 'alerts'));
   sections.push({ key: 'features', title: t('health.features'), rows: feat });

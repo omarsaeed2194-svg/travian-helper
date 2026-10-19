@@ -152,6 +152,16 @@ you're away:
   movements panels, each Health row and the tips open the page where that
   thing is set up, and old links (`#raids`, `#escape`) still land on the
   right page. On a phone the menu is one row that scrolls sideways.
+- **Web app** — the same dashboard on your own web app (Vercel), from any
+  phone or computer: the browser that runs the bot uploads its data every
+  minute (every few seconds while the web app is open) and runs what you do
+  there — settings, build queue, training, farm lists, escapes, pause/resume,
+  check now. Set it up in Settings → Web app with the address and the key
+  from the web app's Connect page. Your Travian password, Telegram token and
+  Discord address never leave the browser; backups, wiping data and the web
+  link itself can only be changed here. Actions still need Chrome running
+  with the extension. The web app's code and how to deploy it are in the
+  travian-helper repository.
 - **Light/dark** — follows your computer, or pick one (popup, dashboard or
   Settings). The dashboard works on a phone-sized window too.
 
@@ -304,6 +314,7 @@ src/merchants.js       Resource balance suggestions between villages
 src/culture.js         Culture points: per-building values and costs, best picks, celebrations, pace
 src/expansion.js       New villages: who builds a Residence, trains settlers, where to found
 src/mapHook.js         On the map page only: passes on the map tiles the game loads
+src/web.js             Web app link: what is uploaded (secrets masked), which commands it may send
 src/ui.js / ui.css     Village cards and styles shared by popup and dashboard
 popup/                 Toolbar popup
 dashboard/             Full dashboard (also the extension's options page); dashboard.js builds the

@@ -73,6 +73,8 @@ export const DEFAULT_SETTINGS = {
   culture: { focus: false, celebrate: 'off' },
   // New villages: every village trains settlers once from Residence 10.
   expansion: { enabled: false, targets: [] },
+  // The web app (Vercel): its address and the key from its Connect page.
+  web: { url: '', key: '' },
 };
 
 export function mergeSettings(saved) {

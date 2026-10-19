@@ -11,6 +11,7 @@ import { recordMapVillages } from './inactive.js';
 import { applyReports } from './reports.js';
 import { savingFor, canAfford, CELEBRATIONS } from './culture.js';
 import { expansionPlan, settlerHome, foundedNow, SETTLERS } from './expansion.js';
+import { SNAPSHOT_KEYS, webBase, snapshotOf, hashOf, cleanRemote } from './web.js';
 import { firstAttack, escapeTiming, escapeDone, escapeDue, escapeTarget, escapeTroops, TOO_LATE_MS, donateTiming, donateDone, donateDue, donationAmounts, amountsText, sameAttack } from './escape.js';
 import { parseCommand, statusText, summaryText, helpText } from './telegram.js';
 import { t, setLanguage, coords, ltr } from './i18n.js';
@@ -1816,6 +1817,12 @@ const COMMANDS = {
       d.expansion[villageId] = { ...(d.expansion[villageId] || {}), ...clean };
     });
   },
+  // Settings → Web app: check in right away (after saving the address/key).
+  async webSyncNow() {
+    await webSync(true);
+    const { health = {} } = await read(['health']);
+    return health.web || null;
+  },
   async finderStop() {
     await patchSchedule({ finderVillage: null, finderScanAt: null });
   },
@@ -2047,6 +2054,93 @@ async function pollTelegram() {
   }
 }
 
+// ------------------------------------------------------------ web app --
+// The web app (Vercel) shows this browser's data and sends commands. Every
+// minute — every few seconds while someone has it open — the browser that
+// drives the game checks in, runs the commands waiting there and sends back
+// their results. New data goes up at once while someone watches, otherwise
+// at most every 5 minutes (the free database plan counts traffic).
+let webBusy = false;
+let webFastUntil = 0;
+let webLooping = false;
+
+async function webSync(force = false) {
+  if (webBusy) return;
+  webBusy = true;
+  try {
+    const s = await getSettings();
+    const base = webBase(s.web.url);
+    if (!base || !s.web.key) return;
+    if (!(await mayRun(Date.now())).ok) return;
+    const device = await getDevice();
+    const version = chrome.runtime.getManifest().version;
+    let { webState = {} } = await chrome.storage.session.get('webState');
+    let results = webState.results || [];
+    // Twice at most: once to pick up commands, once to report on them.
+    for (let round = 0; round < 2; round++) {
+      const data = await chrome.storage.local.get(SNAPSHOT_KEYS);
+      data.settings = await getSettings();
+      try { data.lease = (await chrome.storage.sync.get('lease')).lease || null; } catch (e) { data.lease = null; }
+      const snap = snapshotOf(data, version);
+      const hash = hashOf(snap.text);
+      // New data goes up at once while someone watches, else every 5 minutes at most.
+      const due = Date.now() - (webState.sentAt || 0) >= (webState.viewer ? 0 : 5 * 60000);
+      const upload = !snap.tooLarge && (force || round > 0 || (hash !== webState.hash && due));
+      let res;
+      try {
+        res = await fetch(`${base}/api/agent`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${s.web.key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version, device: device.name, results, snapshotAt: webState.snapshotAt || 0, ...(upload ? { snapshot: snap.snapshot } : {}) }),
+        });
+      } catch (e) {
+        await noteService('web', false, t('web.unreachable'));
+        return;
+      }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await noteService('web', false, res.status === 401 ? t('web.badKey') : json.error || `HTTP ${res.status}`);
+        return;
+      }
+      await noteService('web', true, snap.tooLarge ? t('web.tooLarge') : '');
+      webState = { hash: upload ? hash : webState.hash, sentAt: upload ? Date.now() : webState.sentAt, snapshotAt: json.snapshotAt || webState.snapshotAt, viewer: !!json.viewer, results: [] };
+      await chrome.storage.session.set({ webState });
+      if (json.viewer) webFastUntil = Date.now() + 2 * 60000;
+      results = [];
+      for (const c of json.commands || []) {
+        const args = cleanRemote(c.name, c.args, await getSettings());
+        if (!args || !COMMANDS[c.name]) { results.push({ id: c.id, ok: false, error: t('web.notAllowed') }); continue; }
+        try {
+          const r = await COMMANDS[c.name](args);
+          results.push({ id: c.id, ok: true, result: r === undefined ? null : r });
+          await log('info', t('log.webCommand', { name: c.name }));
+        } catch (e) {
+          results.push({ id: c.id, ok: false, error: e.message });
+        }
+      }
+      if (!results.length) break;
+      await chrome.storage.session.set({ webState: { ...webState, results } });
+    }
+  } finally {
+    webBusy = false;
+  }
+  // Someone has the web app open: answer within seconds, not a minute.
+  if (webFastUntil > Date.now()) {
+    chrome.alarms.create('webPoll', { periodInMinutes: 0.5 });
+    if (!webLooping) {
+      webLooping = true;
+      (async () => {
+        while (webFastUntil > Date.now()) {
+          await sleep(5000);
+          await webSync();
+        }
+        webLooping = false;
+        chrome.alarms.clear('webPoll');
+      })();
+    }
+  }
+}
+
 // ------------------------------------------------------------- lifecycle --
 async function setup() {
   await chrome.alarms.create('tick', { periodInMinutes: 1 });
@@ -2077,6 +2171,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onInstalled.addListener(setup);
 chrome.runtime.onStartup.addListener(setup);
 chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === 'tick' || a.name === 'webPoll') webSync();
   if (a.name === 'tick') { pollTelegram(); tick(); }
   else if (a.name.startsWith('escape:') || a.name.startsWith('donate:')) { urgent = true; tick(false, true); }
 });

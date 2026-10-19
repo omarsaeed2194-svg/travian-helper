@@ -1,0 +1,44 @@
+/* Web app: the bar above the dashboard, the toast, the login and connect
+   pages. Colours come from the extension's ui.css tokens. */
+.web-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--info-bg); color: var(--text); border-block-end: 1px solid var(--border); font-size: 13px;
+}
+.web-bar.warn { background: var(--warn-bg); }
+.web-bar-end { display: flex; align-items: center; gap: 12px; }
+.web-bar a { color: var(--info); font-weight: 500; }
+.web-bar button { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 8px; padding: 3px 10px; cursor: pointer; font: inherit; }
+.web-toast {
+  position: fixed; inset-block-end: 20px; inset-inline-start: 50%; transform: translateX(-50%); z-index: 50;
+  background: var(--text); color: var(--panel); padding: 8px 16px; border-radius: 999px; font-weight: 500; font-size: 13px;
+}
+:root[dir="rtl"] .web-toast { transform: translateX(50%); }
+
+/* Only the extension itself can do these: backups, wiping, taking over,
+   test alerts, and the web link's own settings. */
+.web #exportData, .web #importData, .web #importFile, .web #resetData, .web #takeOver, .web #syncNow,
+.web #testAlert, .web #webPanel { display: none !important; }
+
+/* Login and connect pages */
+.web-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
+.web-card {
+  width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 24px; display: flex; flex-direction: column; gap: 14px;
+}
+.web-card.wide { max-width: 640px; }
+.web-card h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+.web-card h1 img { width: 32px; height: 32px; }
+.web-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-2); }
+.web-card input { font: inherit; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+.web-card .btn { font: inherit; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+.web-card .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.web-card .msg { font-size: 13px; min-height: 1.2em; }
+.web-card .msg.bad { color: var(--bad); }
+.web-card .msg.good { color: var(--good); }
+.web-card .note { font-size: 12px; color: var(--text-2); line-height: 1.6; }
+.web-card ol { margin: 0; padding-inline-start: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.web-card code, .web-key { font-family: ui-monospace, monospace; direction: ltr; unicode-bidi: isolate; }
+.web-key { display: block; padding: 10px; border-radius: 8px; background: var(--bg); border: 1px dashed var(--border); word-break: break-all; user-select: all; }
+.web-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.web-setup { background: var(--warn-bg); border-radius: 10px; padding: 12px; font-size: 13px; line-height: 1.6; }
+.web-setup b { display: block; margin-bottom: 4px; }

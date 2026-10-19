@@ -1,0 +1,13 @@
+{
+  "name": "travian-helper-web",
+  "private": true,
+  "type": "module",
+  "description": "Web app for Travian Helper: the extension's dashboard from anywhere, fed by the extension.",
+  "scripts": {
+    "build": "node web/build.mjs",
+    "dev": "node web/build.mjs && node web/dev-server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
