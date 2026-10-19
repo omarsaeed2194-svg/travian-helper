@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>مساعد ترافيان</title>
+  <link rel="stylesheet" href="../src/ui.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1 data-i18n="app.name"></h1>
+      <span id="server" class="muted small"></span>
+    </div>
+    <div class="top-end">
+      <span id="gold" class="muted small"></span>
+      <button type="button" class="icon-btn" id="themeBtn"></button>
+    </div>
+  </header>
+
+  <section class="toggles">
+    <label class="switch"><input type="checkbox" id="watch"> <span data-i18n="toggle.watch"></span></label>
+    <label class="switch"><input type="checkbox" id="bot"> <span data-i18n="toggle.bot"></span></label>
+    <label class="switch"><input type="checkbox" id="autopilot"> <span data-i18n="toggle.autopilot"></span></label>
+  </section>
+
+  <div id="status" class="status"></div>
+
+  <section class="quick" aria-label="">
+    <button type="button" class="qa" id="qaCheck"><span aria-hidden="true">🔄</span> <span data-i18n="btn.checkNow"></span></button>
+    <button type="button" class="qa" id="qaFarms"><span aria-hidden="true">🐎</span> <span data-i18n="qa.farms"></span></button>
+    <button type="button" class="qa" id="qaPause"></button>
+    <button type="button" class="qa bad" id="qaEscape" hidden><span aria-hidden="true">🏃</span> <span data-i18n="qa.escape"></span></button>
+  </section>
+  <p id="qaMsg" class="small muted qa-msg" role="status"></p>
+
+  <div class="list-head">
+    <span id="villageCount" class="muted small"></span>
+    <button type="button" class="link small" id="viewBtn"></button>
+  </div>
+  <main id="villages"></main>
+
+  <footer class="bottom">
+    <button class="btn" id="openGame" data-i18n="btn.openGame"></button>
+    <button class="btn primary" id="openDashboard" data-i18n="btn.dashboard"></button>
+  </footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

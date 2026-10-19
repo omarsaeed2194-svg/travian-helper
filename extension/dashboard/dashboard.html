@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>مساعد ترافيان</title>
+  <link rel="stylesheet" href="../src/ui.css">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<div class="layout">
+  <nav class="side">
+    <div class="brand">
+      <h1 data-i18n="app.name"></h1>
+      <span id="server" class="muted small"></span>
+      <span id="version" class="muted small"></span>
+      <button type="button" class="btn small ghost theme-btn" id="themeBtn"></button>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="side-toggles">
+      <label class="switch"><input type="checkbox" data-setting="watchEnabled"> <span data-i18n="toggle.watch"></span></label>
+      <label class="switch"><input type="checkbox" data-setting="botEnabled"> <span data-i18n="toggle.bot"></span></label>
+      <label class="switch"><input type="checkbox" data-setting="autopilot.enabled"> <span data-i18n="toggle.autopilot"></span></label>
+      <button class="btn small" id="checkNow" data-i18n="btn.checkNow"></button>
+    </div>
+  </nav>
+
+  <main>
+    <div id="status" class="status"></div>
+
+    <!-- ========================================================= Overview -->
+    <section class="tab" id="tab-overview">
+      <div class="filter-bar" id="ovFilterBar" role="toolbar">
+        <span class="filter-label" data-i18n="ov.filter"></span>
+        <div id="ovFilter" class="chip-row"></div>
+      </div>
+      <div class="scope-head">
+        <div>
+          <h2 id="ovScopeTitle"></h2>
+          <span id="ovScopeSub" class="muted small"></span>
+        </div>
+        <div id="ovAccount" class="account-strip"></div>
+      </div>
+      <div id="ovEmpty" class="panel empty-state" hidden>
+        <p data-i18n="ov.empty"></p>
+      </div>
+      <div id="ovBody">
+        <div class="kpis" id="summary"></div>
+        <div class="dash-grid">
+          <div class="dash-main">
+            <section class="panel village-banner" id="ovBanner" hidden></section>
+            <div class="postcards" id="ovPostcards" hidden></div>
+            <section class="panel">
+              <header class="panel-head">
+                <h2><span aria-hidden="true">💡</span> <span data-i18n="ov.tipsTitle"></span></h2>
+                <span id="ovTipsMeta" class="muted small"></span>
+              </header>
+              <ul id="ovTips" class="tips"></ul>
+              <button type="button" class="btn small ghost" id="ovTipsMore" hidden></button>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2><span aria-hidden="true">🕒</span> <span data-i18n="tl.title"></span></h2><span id="ovTimelineMeta" class="muted small"></span></header>
+              <div id="ovTimeline" class="timeline"></div>
+              <ul id="ovTimelineList" class="feed tl-list"></ul>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2 id="ovResTitle"></h2></header>
+              <div id="ovRes"></div>
+            </section>
+            <section class="panel" id="ovBalancePanel" hidden>
+              <header class="panel-head"><h2><span aria-hidden="true">⚖</span> <span data-i18n="bal.title"></span></h2><span id="ovBalanceMeta" class="muted small"></span></header>
+              <ul id="ovBalance" class="feed"></ul>
+              <p class="muted small" data-i18n="bal.help"></p>
+            </section>
+            <section class="panel" id="ovChartPanel" hidden>
+              <header class="panel-head"><h2 data-i18n="chart.title"></h2><span class="muted small" data-i18n="chart.sub"></span></header>
+              <div id="ovChart" class="chart-root"></div>
+            </section>
+            <section class="panel" id="ovFieldsPanel" hidden>
+              <header class="panel-head"><h2 data-i18n="ov.fieldsTitle"></h2></header>
+              <div id="ovFields"></div>
+            </section>
+          </div>
+          <aside class="dash-side">
+            <section class="panel hero-card" id="ovHero"></section>
+            <section class="panel">
+              <header class="panel-head"><h2><span aria-hidden="true">🗺</span> <span data-i18n="mm.title"></span></h2></header>
+              <div id="ovMap" class="minimap-wrap"></div>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2 data-i18n="ov.troopsTitle"></h2><span class="head-end"><span id="ovTroopsMeta" class="muted small"></span><a href="#troops" class="small" data-goto="troops"></a></span></header>
+              <div id="ovTroops"></div>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2 data-i18n="ov.nextTitle"></h2></header>
+              <dl id="ovNext" class="kv"></dl>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2 data-i18n="ov.queuesTitle"></h2><a href="#build" class="small" data-goto="build"></a></header>
+              <ul id="ovQueues" class="feed"></ul>
+            </section>
+            <section class="panel">
+              <header class="panel-head"><h2 data-i18n="ov.movesTitle"></h2><a href="#defense" class="small" data-goto="defense"></a></header>
+              <ul id="ovMoves" class="feed"></ul>
+            </section>
+            <section class="panel">
+              <header class="panel-head">
+                <h2 data-i18n="ov.activityTitle"></h2>
+                <a href="#log" class="small" data-i18n="ov.allActivity"></a>
+              </header>
+              <ul id="ovActivity" class="feed"></ul>
+            </section>
+          </aside>
+        </div>
+      </div>
+      <div id="ovToast" class="toast" role="status" hidden></div>
+    </section>
+
+    <!-- ============================================== Economy: building -->
+    <section class="tab" id="tab-build">
+      <div class="row wrap">
+        <label><span data-i18n="build.village"></span> <select id="buildVillage"></select></label>
+        <span id="buildScan" class="muted small"></span>
+      </div>
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="build.queue"></h2>
+          <div id="buildWhy" class="status" hidden></div>
+          <p class="muted small" data-i18n="build.queueHelp"></p>
+          <ol id="taskList" class="tasks"></ol>
+          <div class="row">
+            <label><span data-i18n="settings.builders"></span> <select data-setting="maxQueue">
+              <option value="1" data-i18n="settings.builders1"></option>
+              <option value="2" data-i18n="settings.builders2"></option>
+            </select></label>
+          </div>
+          <h3 class="gap" data-i18n="build.autoTitle"></h3>
+          <p class="muted small" data-i18n="build.autoHelp"></p>
+          <div class="row">
+            <select id="fieldsResource">
+              <option value="all" data-i18n="build.allFields"></option>
+              <option value="wood" data-i18n="res.wood"></option>
+              <option value="clay" data-i18n="res.clay"></option>
+              <option value="iron" data-i18n="res.iron"></option>
+              <option value="crop" data-i18n="res.crop"></option>
+            </select>
+            <label><span data-i18n="build.toLevel"></span> <input type="number" id="fieldsLevel" min="1" max="21" value="10" class="num"></label>
+            <button class="btn primary" id="addFieldsTask" data-i18n="btn.add"></button>
+          </div>
+          <h3 class="gap" data-i18n="build.newTitle"></h3>
+          <p class="muted small" data-i18n="build.newHelp"></p>
+          <div class="row wrap">
+            <label><span data-i18n="build.newSite"></span> <select id="newSite"></select></label>
+            <label><span data-i18n="build.newWhat"></span> <select id="newGid"></select></label>
+            <label><span data-i18n="build.toLevel"></span> <input type="number" id="newLevel" min="1" max="20" value="1" class="num"></label>
+            <button class="btn primary" id="addNewBuilding" data-i18n="btn.add"></button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="build.fields"></h2>
+          <table class="list" id="fieldTable"></table>
+          <h2 class="gap" data-i18n="build.buildings"></h2>
+          <table class="list" id="buildingTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ Economy: culture points -->
+    <section class="tab" id="tab-culture">
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="culture.nextTitle"></h2>
+          <div id="cuHead"></div>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="culture.settings"></h2>
+          <label class="switch strong"><input type="checkbox" data-setting="culture.focus"> <span data-i18n="culture.focus"></span></label>
+          <p class="muted small indent" data-i18n="culture.focusHelp"></p>
+          <label><span data-i18n="culture.celebrate"></span> <select data-setting="culture.celebrate">
+            <option value="off" data-i18n="culture.celebrateOffOpt"></option>
+            <option value="small" data-i18n="culture.celebrateSmall"></option>
+            <option value="great" data-i18n="culture.celebrateGreat"></option>
+          </select></label>
+          <p class="muted small" id="cuCelebrateInfo"></p>
+          <p class="muted small" data-i18n="culture.celebrateHelp"></p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="culture.villagesTitle"></h2>
+        <div class="table-wrap"><table class="list" id="cuTable"></table></div>
+        <p class="muted small" data-i18n="culture.tableHelp"></p>
+      </div>
+      <div class="panel" id="expPanel">
+        <header class="panel-head"><h2 data-i18n="exp.title"></h2><span id="expMeta" class="muted small"></span></header>
+        <label class="switch strong"><input type="checkbox" data-setting="expansion.enabled"> <span data-i18n="exp.enable"></span></label>
+        <p class="muted small" data-i18n="exp.help"></p>
+        <p id="expWarn" class="small warn-text" hidden></p>
+        <div class="table-wrap"><table class="list" id="expTable"></table></div>
+        <h3 class="gap" data-i18n="exp.targetsTitle"></h3>
+        <label class="field"><span data-i18n="exp.targets"></span>
+          <textarea id="expTargets" rows="3" dir="ltr" placeholder="12|-34"></textarea></label>
+        <div class="row wrap">
+          <button class="btn" id="expSaveTargets" data-i18n="exp.saveTargets"></button>
+          <button class="btn ghost" id="expScan"></button>
+          <span id="expMsg" class="small muted"></span>
+        </div>
+        <p id="expValleys" class="muted small"></p>
+      </div>
+    </section>
+
+    <!-- ================================================ Army: troops & training -->
+    <section class="tab" id="tab-troops">
+      <div class="panel">
+        <h2 data-i18n="troops.overview"></h2>
+        <p class="muted small" data-i18n="troops.overviewHelp"></p>
+        <div class="table-wrap"><table class="list" id="troopTable"></table></div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="troops.rules"></h2>
+        <p class="muted small" data-i18n="troops.help"></p>
+        <div class="table-wrap"><table class="list" id="trainTable"></table></div>
+        <h3 class="gap" data-i18n="troops.add"></h3>
+        <div class="row wrap">
+          <label><span data-i18n="troops.village"></span> <select id="trainVillage"></select></label>
+          <label><span data-i18n="troops.building"></span> <select id="trainBuilding"></select></label>
+          <label><span data-i18n="troops.unit"></span> <select id="trainUnit"></select></label>
+          <label><span data-i18n="troops.amount"></span> <input type="number" id="trainAmount" min="1" value="10" class="num"></label>
+          <label><span data-i18n="troops.every"></span> <input type="number" id="trainEvery" min="5" value="60" class="num"> <span data-i18n="troops.min"></span></label>
+          <button class="btn primary" id="addTrain" data-i18n="troops.addBtn"></button>
+        </div>
+        <p class="muted small" data-i18n="troops.unitHelp"></p>
+      </div>
+    </section>
+
+    <!-- ============================== Army: defence (escape + alliance donation) -->
+    <section class="tab" id="tab-defense">
+      <div class="panel" id="escapePanel">
+        <h2 data-i18n="escape.title"></h2>
+        <p class="muted small" data-i18n="escape.help"></p>
+        <div class="table-wrap"><table class="list" id="escapeTable"></table></div>
+      </div>
+      <div class="panel">
+        <h2 id="escFormTitle"></h2>
+        <div class="row wrap">
+          <label><span data-i18n="escape.village"></span> <select id="escVillage"></select></label>
+        </div>
+        <div class="sub-cols">
+          <fieldset class="sub">
+            <legend><span aria-hidden="true">🏃</span> <span data-i18n="def.escapePart"></span></legend>
+            <label class="switch"><input type="checkbox" id="escTroops" checked> <span data-i18n="escape.moveTroops"></span></label>
+            <div class="row wrap" id="escTroopRow">
+              <label><span data-i18n="escape.to"></span> <select id="escTarget"></select></label>
+              <label><span data-i18n="escape.lead"></span> <input type="number" id="escLead" min="30" max="3600" value="120" class="num"> <span data-i18n="escape.seconds"></span></label>
+              <label class="switch"><input type="checkbox" id="escHero"> <span data-i18n="escape.hero"></span></label>
+              <label><span data-i18n="escape.spend"></span> <select id="escSpend"></select></label>
+              <p class="muted small" data-i18n="escape.spendHelp"></p>
+            </div>
+            <div class="row wrap" id="escUnitRow">
+              <label class="switch"><input type="checkbox" id="escAll" checked> <span data-i18n="escape.allUnits"></span></label>
+              <div id="escUnits" class="row wrap" hidden></div>
+            </div>
+          </fieldset>
+          <fieldset class="sub">
+            <legend><span aria-hidden="true">💰</span> <span data-i18n="donate.title"></span></legend>
+            <label class="switch"><input type="checkbox" id="escDonate"> <span data-i18n="donate.enable"></span></label>
+            <div class="row wrap">
+              <label><input type="number" id="escDonateSec" min="20" max="600" value="60" class="num"> <span data-i18n="donate.before"></span></label>
+              <label class="switch"><input type="checkbox" id="escKeepCranny" checked> <span data-i18n="donate.keepCranny"></span></label>
+              <label><span data-i18n="donate.bonus"></span> <select id="escBonus"></select></label>
+              <button class="btn small" id="escDonateTest" data-i18n="donate.test"></button>
+            </div>
+            <p class="muted small" data-i18n="donate.help"></p>
+          </fieldset>
+        </div>
+        <div class="row wrap">
+          <button class="btn primary" id="escSave" data-i18n="escape.save"></button>
+          <span id="escMsg" class="small muted"></span>
+        </div>
+        <p class="muted small" data-i18n="escape.notes"></p>
+        <p id="escWarn" class="small warn-text" hidden></p>
+      </div>
+    </section>
+
+    <!-- ===================================================== Army: farm lists -->
+    <section class="tab" id="tab-farms">
+      <div class="panel">
+        <h2 data-i18n="farm.title"></h2>
+        <p class="muted small" data-i18n="farm.help"></p>
+        <label class="switch"><input type="checkbox" data-setting="reports.enabled"> <span data-i18n="farm.reports"></span></label>
+        <p class="muted small indent" data-i18n="farm.reportsHelp"></p>
+        <div class="table-wrap"><table class="list" id="farmListTable"></table></div>
+        <h3 class="gap" data-i18n="farm.newList"></h3>
+        <div class="row wrap">
+          <label><span data-i18n="farm.name"></span> <input type="text" id="flName" size="14" maxlength="40"></label>
+          <label><span data-i18n="troops.village"></span> <select id="flVillage"></select></label>
+          <label><span data-i18n="troops.every"></span> <input type="number" id="flEvery" min="5" value="30" class="num"> <span data-i18n="troops.min"></span></label>
+          <label><span data-i18n="farm.mission"></span> <select id="flType"><option value="4" data-i18n="farm.raid"></option><option value="3" data-i18n="farm.attack"></option></select></label>
+          <button class="btn primary" id="flAdd" data-i18n="farm.create"></button>
+        </div>
+      </div>
+
+      <div class="panel" id="ftPanel" hidden>
+        <header class="panel-head"><h2 id="ftTitle"></h2><span id="ftMeta" class="muted small"></span></header>
+        <div class="row wrap">
+          <label><span data-i18n="farm.name"></span> <input type="text" data-fl="name" size="14" maxlength="40"></label>
+          <label><span data-i18n="troops.every"></span> <input type="number" data-fl="everyMinutes" min="5" class="num"> <span data-i18n="troops.min"></span></label>
+          <label><span data-i18n="farm.mission"></span> <select data-fl="eventType"><option value="4" data-i18n="farm.raid"></option><option value="3" data-i18n="farm.attack"></option></select></label>
+          <label><span data-i18n="farm.maxPerRound"></span> <input type="number" data-fl="maxPerRound" min="1" class="num"></label>
+          <label class="switch"><input type="checkbox" data-fl="skipWhenAttacked"> <span data-i18n="farm.skipAttacked"></span></label>
+        </div>
+        <div class="table-wrap"><table class="list" id="ftTable"></table></div>
+        <h3 class="gap" id="ftFormTitle"></h3>
+        <div class="ft-form">
+          <label class="field"><span data-i18n="farm.coords"></span>
+            <textarea id="ftCoords" rows="3" dir="ltr" placeholder="12|-34 Farm&#10;(15|−30)"></textarea></label>
+          <div class="row wrap">
+            <label><span data-i18n="farm.type"></span> <select id="ftType"><option value="village" data-i18n="farm.typeVillage"></option><option value="oasis" data-i18n="farm.typeOasis"></option></select></label>
+          </div>
+          <div class="troop-editor" id="ftTroops"></div>
+          <div class="row wrap">
+            <button class="btn primary" id="ftSave"></button>
+            <button class="btn" id="ftApplyAll" data-i18n="farm.applyAll"></button>
+            <button class="btn ghost" id="ftCancel" data-i18n="farm.cancelEdit" hidden></button>
+            <span id="ftMsg" class="small muted"></span>
+          </div>
+          <p class="muted small" data-i18n="farm.formHelp"></p>
+        </div>
+      </div>
+
+      <div class="panel" id="finderPanel">
+        <header class="panel-head"><h2 data-i18n="finder.title"></h2><span id="finderMeta" class="muted small"></span></header>
+        <p class="muted small" data-i18n="finder.help"></p>
+        <div class="row wrap">
+          <label><span data-i18n="finder.around"></span> <select id="finderVillage"></select></label>
+          <label><span data-i18n="finder.radius"></span> <input type="number" id="finderRadius" min="3" max="100" value="25" class="num"></label>
+          <button class="btn primary" id="finderScan" data-i18n="finder.scan"></button>
+          <button class="btn ghost" id="finderStop" data-i18n="finder.stop" hidden></button>
+        </div>
+        <p id="finderStatus" class="small muted"></p>
+        <div class="table-wrap"><table class="list" id="finderTable"></table></div>
+        <p id="finderMsg" class="small muted"></p>
+      </div>
+
+      <div class="panel">
+        <h2 data-i18n="raids.farmLists"></h2>
+        <label class="switch"><input type="checkbox" data-setting="farm.enabled"> <span data-i18n="raids.auto"></span></label>
+        <div class="row wrap">
+          <label><span data-i18n="raids.every"></span> <input type="number" data-setting="farm.intervalMinutes" min="5" class="num"> <span data-i18n="raids.minutes"></span></label>
+          <label><span data-i18n="raids.fromVillage"></span> <select data-setting="farm.villageId" id="farmVillage"></select></label>
+        </div>
+        <h3 data-i18n="raids.lists"></h3>
+        <div id="farmLists"></div>
+        <p class="muted small" data-i18n="raids.help"></p>
+      </div>
+    </section>
+
+    <!-- =================================================== Army: oasis raids -->
+    <section class="tab" id="tab-oasis">
+      <div class="panel">
+        <h2 data-i18n="raid.title"></h2>
+        <p class="muted small" data-i18n="raid.help"></p>
+        <p class="muted small" data-i18n="raid.runNote"></p>
+        <div class="table-wrap"><table class="list" id="raidTable"></table></div>
+        <h3 class="gap" data-i18n="raid.add"></h3>
+        <div class="row wrap">
+          <label><span data-i18n="troops.village"></span> <select id="raidVillage"></select></label>
+          <label><span data-i18n="troops.unit"></span> <select id="raidUnit"></select></label>
+          <label><span data-i18n="raid.amount"></span> <input type="number" id="raidAmount" min="1" value="5" class="num"></label>
+          <label><span data-i18n="raid.radius"></span> <input type="number" id="raidRadius" min="1" max="30" value="7" class="num"></label>
+          <label><span data-i18n="troops.every"></span> <input type="number" id="raidEvery" min="10" value="30" class="num"> <span data-i18n="troops.min"></span></label>
+          <label><span data-i18n="raid.maxPerRun"></span> <input type="number" id="raidMax" min="1" max="20" value="3" class="num"></label>
+          <button class="btn primary" id="addRaid" data-i18n="raid.addBtn"></button>
+        </div>
+        <p class="muted small" data-i18n="raid.unitHelp"></p>
+      </div>
+      <div class="panel">
+        <header class="panel-head"><h2 id="oasisTitle"></h2><span id="oasisMeta" class="muted small"></span></header>
+        <div class="row wrap">
+          <button class="btn" id="scanOases" data-i18n="raid.scan"></button>
+          <label><span data-i18n="raid.manual"></span> <input type="text" id="targetXY" placeholder="12|-34" dir="ltr" size="9"></label>
+          <button class="btn" id="addTarget" data-i18n="raid.addTarget"></button>
+          <span id="targetMsg" class="small muted"></span>
+        </div>
+        <div class="table-wrap"><table class="list" id="oasisTable"></table></div>
+        <p class="muted small" data-i18n="raid.safety"></p>
+      </div>
+    </section>
+
+    <!-- =============================================== Automation: autopilot -->
+    <section class="tab" id="tab-autopilot">
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="ap.title"></h2>
+          <p class="muted small" data-i18n="ap.help"></p>
+          <label class="switch strong"><input type="checkbox" data-setting="autopilot.enabled"> <span data-i18n="ap.enable"></span></label>
+          <h3 class="gap" data-i18n="ap.what"></h3>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.build"> <span data-i18n="ap.build"></span></label>
+          <div class="row indent"><label><span data-i18n="ap.fieldsMax"></span> <input type="number" min="1" max="20" data-setting="autopilot.fieldsMax" class="num"></label></div>
+          <p class="muted small indent" data-i18n="ap.buildHelp"></p>
+          <label class="switch indent"><input type="checkbox" data-setting="autopilot.construct"> <span data-i18n="ap.construct"></span></label>
+          <p class="muted small indent" data-i18n="ap.constructHelp"></p>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.adventures"> <span data-i18n="ap.adventures"></span></label>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.farmLists"> <span data-i18n="ap.farmLists"></span></label>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.quests"> <span data-i18n="ap.quests"></span></label>
+          <p class="muted small indent" data-i18n="ap.questsHelp"></p>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.heroBag"> <span data-i18n="ap.heroBag"></span></label>
+          <p class="muted small indent" data-i18n="ap.heroBagHelp"></p>
+          <p class="muted small" data-i18n="ap.raidsNote"></p>
+          <p class="muted small" data-i18n="ap.pauseNote"></p>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="ap.planTitle"></h2>
+          <p class="muted small" data-i18n="ap.planHelp"></p>
+          <ul id="apPlan" class="feed"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================================================== Automation: hero -->
+    <section class="tab" id="tab-hero">
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="hero.title"></h2>
+          <dl id="heroInfo" class="kv"></dl>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="hero.advTitle"></h2>
+          <label class="switch"><input type="checkbox" data-setting="adventure.enabled"> <span data-i18n="hero.auto"></span></label>
+          <p class="muted small" data-i18n="hero.help"></p>
+          <h3 class="gap" data-i18n="hero.bagTitle"></h3>
+          <label class="switch"><input type="checkbox" data-setting="autopilot.heroBag"> <span data-i18n="ap.heroBag"></span></label>
+          <p class="muted small indent" data-i18n="ap.heroBagHelp"></p>
+          <p class="muted small" data-i18n="hero.apNote"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================== System: alerts -->
+    <section class="tab" id="tab-alerts">
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="alerts.what"></h2>
+          <label class="switch"><input type="checkbox" data-setting="alerts.attacks"> <span data-i18n="alerts.attacks"></span></label>
+          <label class="switch"><input type="checkbox" data-setting="alerts.storage"> <span data-i18n="alerts.storage"></span></label>
+          <div class="row indent">
+            <label><span data-i18n="alerts.storageWithin"></span> <input type="number" step="0.5" min="0" data-setting="alerts.storageHours" class="num"> <span data-i18n="alerts.hours"></span></label>
+          </div>
+          <label class="switch"><input type="checkbox" data-setting="alerts.starvation"> <span data-i18n="alerts.starvation"></span></label>
+          <label class="switch"><input type="checkbox" data-setting="alerts.loggedOut"> <span data-i18n="alerts.loggedOut"></span></label>
+          <label class="switch"><input type="checkbox" data-setting="alerts.botErrors"> <span data-i18n="alerts.botErrors"></span></label>
+          <h3 class="gap" data-i18n="alerts.desktopTitle"></h3>
+          <label class="switch"><input type="checkbox" data-setting="alerts.desktop"> <span data-i18n="alerts.desktop"></span></label>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="alerts.phone"></h2>
+          <p class="muted small" data-i18n="alerts.phoneHelp"></p>
+          <h3>Telegram</h3>
+          <ol class="small muted howto">
+            <li data-i18n-html="alerts.tgStep1"></li>
+            <li data-i18n-html="alerts.tgStep2"></li>
+          </ol>
+          <label class="field"><span data-i18n="alerts.tgToken"></span> <input type="password" data-setting="telegram.token" autocomplete="off" dir="ltr"></label>
+          <label class="field"><span data-i18n="alerts.tgChat"></span> <input type="text" data-setting="telegram.chatId" autocomplete="off" dir="ltr"></label>
+          <label class="switch"><input type="checkbox" data-setting="telegram.control"> <span data-i18n="tg.controlToggle"></span></label>
+          <p class="muted small" data-i18n="tg.controlHelp"></p>
+          <div class="row wrap">
+            <label><span data-i18n="tg.summaryAt"></span> <select data-setting="telegram.summaryHour" id="tgSummaryHour"></select></label>
+            <button class="btn small" id="tgSummaryNow" data-i18n="tg.summaryNow"></button>
+            <span id="tgSummaryMsg" class="small muted"></span>
+          </div>
+          <h3 class="gap">Discord</h3>
+          <p class="small muted" data-i18n="alerts.discordHelp"></p>
+          <label class="field"><span data-i18n="alerts.webhook"></span> <input type="password" data-setting="discord.webhookUrl" autocomplete="off" dir="ltr" placeholder="https://discord.com/api/webhooks/…"></label>
+          <div class="row gap">
+            <button class="btn" id="testAlert" data-i18n="alerts.test"></button>
+            <span id="testResult" class="small muted"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ System: settings -->
+    <section class="tab" id="tab-settings">
+      <div class="cols">
+        <div class="panel">
+          <h2 data-i18n="settings.language"></h2>
+          <div class="row"><select data-setting="language" id="language"></select></div>
+          <h2 class="gap" data-i18n="theme.label"></h2>
+          <div class="row"><select data-setting="theme" id="themeSelect"></select></div>
+        </div>
+        <div class="panel">
+          <h2 data-i18n="settings.timing"></h2>
+          <div class="row"><label><span data-i18n="settings.checkEvery"></span> <input type="number" min="3" data-setting="refreshMinutes" class="num"> <span data-i18n="settings.minutes"></span></label></div>
+          <div class="row"><label><span data-i18n="settings.jitter"></span> <input type="number" min="0" max="60" data-setting="jitterPercent" class="num"> %</label></div>
+          <label class="switch"><input type="checkbox" data-setting="pauseWhenPlaying"> <span data-i18n="settings.pause"></span></label>
+          <div class="row indent"><label><span data-i18n="settings.resume"></span> <input type="number" min="1" data-setting="pauseMinutes" class="num"> <span data-i18n="settings.resumeAfter"></span></label></div>
+          <label class="switch"><input type="checkbox" data-setting="activeHours.enabled"> <span data-i18n="settings.activeHours"></span></label>
+          <div class="row indent">
+            <input type="time" data-setting="activeHours.from"> <span data-i18n="settings.and"></span> <input type="time" data-setting="activeHours.to">
+          </div>
+          <p class="muted small indent" data-i18n="settings.activeHelp"></p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="sync.title"></h2>
+        <p class="muted small" data-i18n="sync.help"></p>
+        <dl class="kv">
+          <dt data-i18n="sync.thisDevice"></dt><dd id="syncDevice"></dd>
+          <dt data-i18n="sync.savedAt"></dt><dd id="syncSaved"></dd>
+          <dt data-i18n="sync.runsOn"></dt><dd id="syncRunsOn"></dd>
+        </dl>
+        <div class="row wrap">
+          <button class="btn primary" id="takeOver" data-i18n="sync.takeOver" hidden></button>
+          <button class="btn" id="syncNow" data-i18n="sync.syncNow"></button>
+        </div>
+        <h3 class="gap" data-i18n="sync.backupTitle"></h3>
+        <p class="muted small" data-i18n="sync.backupHelp"></p>
+        <div class="row wrap">
+          <button class="btn" id="exportData" data-i18n="sync.export"></button>
+          <button class="btn" id="importData" data-i18n="sync.import"></button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+          <span id="backupResult" class="small muted"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 data-i18n="settings.server"></h2>
+        <p><span id="serverFull" class="mono" dir="ltr"></span></p>
+        <p class="muted small" data-i18n="settings.serverHelp"></p>
+        <div class="row"><button class="btn danger" id="resetData" data-i18n="settings.reset"></button></div>
+      </div>
+    </section>
+
+    <!-- ================================================== System: health -->
+    <section class="tab" id="tab-health">
+      <div class="panel health-head" id="healthHead"></div>
+      <div class="cols" id="healthSections"></div>
+    </section>
+
+    <!-- ===================================================== System: log -->
+    <section class="tab" id="tab-log">
+      <div class="panel">
+        <div class="row between">
+          <h2 data-i18n="log.title"></h2>
+          <button class="btn small" id="clearLog" data-i18n="log.clear"></button>
+        </div>
+        <ul id="logList" class="log"></ul>
+      </div>
+    </section>
+  </main>
+</div>
+<script type="module" src="dashboard.js"></script>
+</body>
+</html>
