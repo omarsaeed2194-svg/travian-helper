@@ -113,7 +113,7 @@ function renderOases(now) {
   // How the last map read went (details in Health → diagnostics report).
   const md = data.account.mapDiag;
   $('mapDiagLine').textContent = !md ? '' : md.ok
-    ? t('map.lastOk', { ago: fmtAgo(md.at, now), n: md.tiles, o: md.oases, how: t(`map.how.${md.method || 'fetch'}`) })
+    ? t('map.lastOk', { ago: fmtAgo(md.at, now), where: md.village || '—', n: md.tiles, o: md.oases, how: t(`map.how.${md.method || 'fetch'}`) })
     : t('map.lastFail', { ago: fmtAgo(md.at, now) });
   $('mapDiagLine').className = `small ${md && !md.ok ? 'bad' : 'muted'}`;
   if (!v) { $('oasisTable').innerHTML = ''; $('oasisMeta').textContent = ''; return; }
@@ -190,7 +190,7 @@ function ruleForVillage() {
 $('scanOases').addEventListener('click', async (e) => {
   e.target.disabled = true;
   $('targetMsg').textContent = t('raid.scanQueued');
-  try { await command('scanOases', { villageId: $('raidVillage').value }); } finally { setTimeout(() => { e.target.disabled = false; }, 4000); }
+  try { await command('scanOases', { villageId: 'all' }); } finally { setTimeout(() => { e.target.disabled = false; }, 4000); }
 });
 
 $('addTarget').addEventListener('click', async () => {

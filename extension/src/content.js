@@ -97,16 +97,6 @@
     return null;
   }
 
-  // Map request centres covering `radius` around (x, y): one answer covers
-  // 31×31 tiles (±15) at the zoom the bot asks for.
-  function scanCenters(x, y, radius) {
-    const n = Math.min(2, Math.max(0, Math.ceil((radius - 15) / 31)));
-    const wrap = (c) => ((((c + 200) % 401) + 401) % 401) - 200; // the map wraps around at ±200
-    const out = [{ x, y }];
-    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) if (i || j) out.push({ x: wrap(x + i * 31), y: wrap(y + j * 31) });
-    return out;
-  }
-
   // The send form's mission radios: name="eventType" on current servers
   // (5 reinforcement, 3 attack, 4 raid), name="c" on older ones (2, 3, 4).
   const MISSIONS = {
@@ -178,43 +168,36 @@
     if (e.source !== window || !e.data) return;
     if (e.data.source === 'tvh-map-note' && e.data.note && mapNotes.length < 30) mapNotes.push(e.data.note);
     if (e.data.source !== 'tvh-map' || !Array.isArray(e.data.tiles)) return;
-    for (const tile of e.data.tiles) {
-      const pos = tile && (tile.position || tile);
-      if (pos && pos.x != null && pos.y != null && mapTiles.size < 5000) mapTiles.set(`${pos.x}|${pos.y}`, tile);
-    }
+    addTiles(e.data.tiles);
   });
   // A few raw tiles (shortened) for the diagnostics report: if the game's
   // format differs from what the readers expect, this shows how.
   const sample = (tiles) => tiles.slice(0, 3).map((t) => JSON.stringify(t).slice(0, 400));
   const readTiles = (tiles) => ({ tiles: tiles.length, oases: P.oasesFromTiles(tiles), villages: P.villagesFromTiles(tiles), valleys: P.valleysFromTiles(tiles), sample: sample(tiles) });
 
-  // The page's own world (pageBridge.js) can use the game's API client.
-  function bridge(kind, args, timeout = 30000) {
+  // The page's own world (pageBridge.js, mapHook.js on the map page):
+  // a request there and its answer.
+  function pageAsk(source, payload, replySource, timeout) {
     const id = Math.random().toString(36).slice(2);
     return new Promise((resolve) => {
       const done = (result) => { window.removeEventListener('message', on); clearTimeout(timer); resolve(result); };
-      const on = (e) => { if (e.source === window && e.data && e.data.source === 'tvh-bridge-reply' && e.data.id === id) done(e.data.result); };
-      const timer = setTimeout(() => done({ ok: false, attempts: [{ how: 'bridge', ok: false, error: 'no answer from the page' }] }), timeout);
+      const on = (e) => { if (e.source === window && e.data && e.data.source === replySource && e.data.id === id) done(e.data); };
+      const timer = setTimeout(() => done(null), timeout);
       window.addEventListener('message', on);
-      window.postMessage({ source: 'tvh-bridge', id, kind, args }, location.origin);
+      window.postMessage({ source, id, ...payload }, location.origin);
     });
   }
+  async function gameVersionLive() {
+    const r = await pageAsk('tvh-bridge', { kind: 'gameInfo' }, 'tvh-bridge-reply', 3000);
+    return (r && r.result && r.result.version) || gameVersion();
+  }
 
-  // One map request around (x, y): the game's own API client first (it adds
-  // whatever the game adds to its requests), else the extension's own.
-  async function mapAt(x, y, method, prefer) {
-    let version = null;
-    const diag = [];
-    if (method !== 'fetch') {
-      const viaGame = await bridge('mapPosition', { x, y, zoomLevel: 3, prefer });
-      diag.push(...(viaGame.attempts || []));
-      if (viaGame.ok && viaGame.tiles && viaGame.tiles.length) return { method: 'game', how: viaGame.how, tiles: viaGame.tiles, diag };
-      if (method === 'game') return { diag };
-      version = viaGame.version || null;
-    }
+  // The extension's own map request around (x, y), as a fallback when the
+  // map page can't be read.
+  async function mapAt(x, y, version) {
     const headers = { 'Content-Type': 'application/json; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' };
-    version = version || gameVersion();
     if (version) headers['X-Version'] = version;
+    const how = `request${version ? ` v${version}` : ' (no version)'}`;
     let res;
     try {
       res = await fetch('/api/v1/map/position', {
@@ -222,15 +205,20 @@
         body: JSON.stringify({ data: { x, y, zoomLevel: 3, ignorePositions: [] } }),
       });
     } catch (e) {
-      diag.push({ how: 'fetch', ok: false, error: e.message });
-      return { diag };
+      return { diag: [{ how, ok: false, error: e.message }] };
     }
     const json = await res.json().catch(() => null);
     const tiles = P.findTiles(json) || [];
-    diag.push({ how: `fetch${version ? ` v${version}` : ' (no version)'}`, ok: res.ok && tiles.length > 0, status: res.status, shape: P.shapeOf(json), tiles: tiles.length, ...(res.ok ? {} : { body: JSON.stringify(json).slice(0, 300) }) });
-    if (!res.ok || !tiles.length) return { diag, status: res.status };
-    return { method: 'fetch', tiles, diag };
+    const diag = [{ how, ok: res.ok && tiles.length > 0, status: res.status, shape: P.shapeOf(json), tiles: tiles.length, ...(res.ok ? {} : { body: JSON.stringify(json).slice(0, 300) }) }];
+    return res.ok && tiles.length ? { tiles, diag } : { diag, status: res.status };
   }
+
+  const addTiles = (list) => {
+    for (const tile of list || []) {
+      const pos = tile && (tile.position || tile);
+      if (pos && pos.x != null && pos.y != null && mapTiles.size < 80000) mapTiles.set(`${pos.x}|${pos.y}`, tile);
+    }
+  };
 
   const actions = {
     async upgrade() {
@@ -361,37 +349,52 @@
       return { ok: true, navigating: true };
     },
 
-    // Oases around a point, from the same map API the game's map uses:
-    // several requests when the radius is more than one answer covers.
-    async scanMap({ x, y, radius = 15 }) {
+    // Fallback: the extension's own map request for each area (`centers`),
+    // with the game's version. Stops at the first refusal.
+    async scanMap({ centers }) {
+      const version = await gameVersionLive();
       const diag = [];
-      const all = new Map();
-      let method = null, how = null, status = null;
-      const centers = scanCenters(x, y, radius);
+      const tiles = new Map();
+      let status = null;
+      let done = 0;
       const end = Date.now() + 100000; // well inside the background's wait for an answer
-      for (const [i, c] of centers.entries()) {
+      for (const [i, c] of (centers || []).entries()) {
         if (i && Date.now() > end) break;
         if (i) await sleep(rand(700, 1500));
-        const r = await mapAt(c.x, c.y, method, how);
+        const r = await mapAt(c.x, c.y, version);
         if (!i || !r.tiles) diag.push(...r.diag);
-        if (!r.tiles) { status = r.status; if (!i) break; continue; }
-        method = r.method; how = r.how;
-        for (const tile of r.tiles) { const p = tile.position || tile; all.set(`${p.x}|${p.y}`, tile); }
+        if (!r.tiles) { status = r.status; break; }
+        done += 1;
+        for (const tile of r.tiles) { const p = tile.position || tile; tiles.set(`${p.x}|${p.y}`, tile); }
       }
-      if (!all.size) return { ok: false, code: 'mapApi', status, diag };
-      if (centers.length > 1) diag.push({ how: `${centers.length} areas`, ok: true, tiles: all.size });
-      return { ok: true, method, diag, ...readTiles([...all.values()]) };
+      const missing = (centers || []).slice(done);
+      if (!tiles.size) return { ok: false, code: 'mapApi', status, diag, missing };
+      return { ok: true, method: 'request', diag, missing, ...readTiles([...tiles.values()]) };
     },
 
-    // On the map page (karte.php): the tiles the game itself loaded there.
-    async mapTiles() {
+    // On the map page (karte.php): the tiles the game itself loaded, then
+    // the game's own request again for each of `centers` (other areas and
+    // villages). Answers what all of it showed, and which areas are still
+    // missing (the game's request couldn't be reused for them).
+    async mapTiles({ centers = [] } = {}) {
       window.postMessage({ source: 'tvh-map-get' }, location.origin);
       await waitFor(() => mapTiles.size > 0, 15000);
       if (mapTiles.size) await sleep(rand(1500, 2500)); // the rest of the view arrives in parts
-      const diag = mapNotes.map((n) => ({ how: `page ${n.path}`, ok: n.tiles > 0, status: n.status, shape: n.shape, tiles: n.tiles }));
-      if (!mapNotes.length) diag.push({ how: 'page', ok: false, error: 'no API answer seen on the map page (hook not run, or the game loaded nothing)' });
-      if (!mapTiles.size) return { ok: false, code: 'mapApi', diag };
-      return { ok: true, method: 'page', diag, ...readTiles([...mapTiles.values()]) };
+      const diag = mapNotes.splice(0).map((n) => ({ how: `page ${n.path}`, ok: n.tiles > 0, status: n.status, shape: n.shape, tiles: n.tiles, ...(n.reusable === false ? { error: 'the game\'s request can\'t be reused for other areas' } : {}) }));
+      if (!diag.length && !mapTiles.size) diag.push({ how: 'page', ok: false, error: 'no answer from the game\'s map API seen on the map page' });
+      let missing = centers;
+      if (centers.length && mapTiles.size) {
+        const reply = await pageAsk('tvh-map-replay', { centers }, 'tvh-map-replay-reply', 150000);
+        const results = (reply && reply.results) || [];
+        for (const r of results) if (r.ok) addTiles(r.tiles);
+        const failed = results.filter((r) => !r.ok);
+        missing = reply ? failed.map(({ x, y }) => ({ x, y })) : centers;
+        diag.push({ how: `page: ${centers.length} more areas`, ok: !failed.length && !!reply, tiles: results.reduce((n, r) => n + (r.ok ? r.tiles.length : 0), 0),
+          ...(reply ? {} : { error: 'no answer from the map page' }),
+          ...(failed.length ? { error: `${failed.length} failed: ${[...new Set(failed.map((r) => r.error || `HTTP ${r.status}`))].join(', ').slice(0, 160)}` } : {}) });
+      }
+      if (!mapTiles.size) return { ok: false, code: 'mapApi', diag, missing };
+      return { ok: true, method: 'page', diag, missing, ...readTiles([...mapTiles.values()]) };
     },
 
     // Empty building site: the chosen building's "Construct" button.

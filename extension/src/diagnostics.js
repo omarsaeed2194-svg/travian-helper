@@ -66,7 +66,7 @@ export function diagnosticsReport(data, env, now = Date.now()) {
   const m = acc.mapDiag;
   if (!m) add('Map: not read yet');
   else {
-    add(`Map: last read ${ago(m.at, now)} around ${m.village}: ${m.ok ? 'OK' : 'FAILED'} · method ${m.method || '—'} · tiles ${m.tiles} · oases ${m.oases} · players ${m.players} · valleys ${m.valleys}`);
+    add(`Map: last read ${ago(m.at, now)} around ${m.village}: ${m.ok ? 'OK' : 'FAILED'} · method ${m.method || '—'} · areas ${m.areas ?? '?'}${m.missing ? ` (${m.missing} not read)` : ''} · tiles ${m.tiles} · oases ${m.oases} · players ${m.players} · valleys ${m.valleys}`);
     for (const a of m.attempts || []) {
       add(`  - ${a.how}: ${a.ok ? 'ok' : 'failed'}${a.status ? ` · HTTP ${a.status}` : ''}${a.shape ? ` · ${a.shape}` : ''}${a.tiles != null ? ` · tiles ${a.tiles}` : ''}${a.error ? ` · ${a.error}` : ''}${a.body ? ` · ${a.body}` : ''}`);
     }

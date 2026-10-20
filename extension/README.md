@@ -306,10 +306,17 @@ themselves. Save them first:
   selectors in `src/parser.js` and `src/content.js` are updated. Watch the
   **Activity log** for errors, and use **Bot health → Copy report** to send
   what happened (no passwords, tokens or keys are in it).
-- **Map scans** read up to 77 tiles around a village (one map answer covers
-  ±15, so a bigger raid or finder radius takes several requests). Numbers in
-  the map's tooltips are written with direction marks on right-to-left
-  servers; the extension removes them before reading animals and population.
+- **Map scans** open the game's own map page in the bot tab and read what
+  the game loads there, then send the game's own request again (same
+  address and headers, only the coordinates changed) for every other area:
+  around every village with **Scan the map around all villages**, up to 77
+  tiles around each (one answer covers ±15). The extension never calls the
+  game's own scripts (guessed calls made the game show "an unexpected
+  error"). If the game's request can't be reused, each area gets its own
+  map page; if the map page shows nothing, the extension sends its own
+  request. Numbers in the map's tooltips are written with direction marks
+  on right-to-left servers; they are removed before reading animals and
+  population.
 
 ## Files
 

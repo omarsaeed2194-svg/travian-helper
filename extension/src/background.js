@@ -711,6 +711,26 @@ async function trainOnce(tabId, rule, s, next) {
   return next;
 }
 
+// Map areas to ask for around each village, as far as `radiusOf(v)` (up
+// to 77 tiles): one answer covers ±15, so a bigger radius takes a grid, 31
+// tiles apart. Each village's own spot comes first; an area within 7 tiles
+// of one already listed is left out.
+function mapCenters(list, radiusOf) {
+  const wrap = (c) => ((((c + 200) % 401) + 401) % 401) - 200; // the map wraps around at ±200
+  const out = [];
+  for (const v of list) {
+    const n = Math.min(2, Math.max(0, Math.ceil((radiusOf(v) - 15) / 31)));
+    const steps = [];
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) steps.push([i, j]);
+    steps.sort((a, b) => Math.abs(a[0]) + Math.abs(a[1]) - Math.abs(b[0]) - Math.abs(b[1]));
+    for (const [i, j] of steps) {
+      const c = { x: wrap(v.x + i * 31), y: wrap(v.y + j * 31) };
+      if (!out.some((o) => Math.abs(o.x - c.x) <= 7 && Math.abs(o.y - c.y) <= 7)) out.push(c);
+    }
+  }
+  return out.slice(0, 150);
+}
+
 // Every village's pages (or just `job.villageIds`): main page, buildings
 // now and then, and what's in training.
 async function refreshVillages(tabId, job, s) {
@@ -1146,79 +1166,112 @@ const JOBS = {
     await bump('trained', amount);
   },
 
-  // Oases around a village, from the game's map. Results go into `oases`.
+  // Oases, free valleys and player villages around one village or several
+  // (`villageIds`), from the game's map. Results go into `oases`, `valleys`
+  // and `mapVillages`.
   async scan(tabId, job, s) {
-    const vid = job.villageId;
-    const { villages = {} } = await read(['villages']);
-    const v = villages[vid];
+    const ids = job.villageIds || [job.villageId];
+    const { villages = {}, raids = [], schedule = {} } = await read(['villages', 'raids', 'schedule']);
     await update(['schedule'], (d) => {
       if (!d.schedule) return;
-      if (d.schedule.scanVillage === vid) d.schedule.scanVillage = null;
+      if (ids.includes(d.schedule.scanVillage)) d.schedule.scanVillage = null;
+      if (job.villageIds && job.asked) d.schedule.scanVillages = null;
       // Even when this look fails, the next finder scan waits its turn.
-      if (d.schedule.finderVillage === vid) d.schedule.finderScanAt = Date.now() + jittered(12 * 3600000, 15);
+      if (ids.includes(d.schedule.finderVillage)) d.schedule.finderScanAt = Date.now() + jittered(12 * 3600000, 15);
     });
-    if (!v) return;
-    if (v.x == null) { await log('error', t('log.scanNoCoords'), vid); return; }
-    // As far as this village's raid rules (or the finder) look, up to 77
-    // tiles: one map answer covers ±15.
-    const { raids = [], schedule = {} } = await read(['raids', 'schedule']);
-    const radius = Math.max(15, ...raids.filter((r) => r.villageId === vid).map((r) => Number(r.radius) || 0),
-      schedule.finderVillage === vid ? Number(schedule.finderRadius) || 25 : 0);
-    // Two ways to read the map: a request (through the game's own API
-    // client, else the extension's), or the map page itself, reading what
-    // the game loads there (zoomed out, centred on the village). The way
-    // that worked last time goes first. Every attempt is kept for the
-    // diagnostics report.
-    const { account = {} } = await read(['account']);
+    const list = ids.map((id) => villages[id]).filter(Boolean);
+    if (!list.length) return;
+    for (const v of list.filter((x) => x.x == null)) await log('error', t('log.scanNoCoords'), v.id);
+    const todo = list.filter((x) => x.x != null);
+    if (!todo.length) return;
+    // As far as each village's raid rules (or the finder) look: one map
+    // answer covers ±15, a bigger radius takes several.
+    const radiusOf = (v) => Math.max(15, ...raids.filter((r) => r.villageId === v.id).map((r) => Number(r.radius) || 0),
+      schedule.finderVillage === v.id ? Number(schedule.finderRadius) || 25 : 0);
+    const centers = mapCenters(todo, radiusOf);
+    // First the game's own map page: what the game loads there, then the
+    // game's own request again for every other area (no guessing how to
+    // ask). The extension's own request only if the page shows nothing.
+    // Every attempt is kept for the diagnostics report.
     const attempts = [];
     const ok = (r) => !!(r && r.ok && r.tiles);
-    const direct = async () => {
-      try {
-        await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(vid)}`);
-        const { res: r } = await act(tabId, { kind: 'scanMap', x: v.x, y: v.y, radius }, false);
-        attempts.push(...(r.diag || []));
-        if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'request', ok: false, error: reasonText(r) });
-        return r;
-      } catch (e) {
-        if (e.loggedOut) throw e;
-        attempts.push({ how: 'request', ok: false, error: e.message });
-        return { ok: false, code: 'mapApi' };
-      }
+    const found = { oases: new Map(), villages: new Map(), valleys: new Map(), tiles: 0, sample: [], method: null };
+    const take = (r) => {
+      if (!ok(r)) return;
+      for (const [k, l] of [['oases', r.oases], ['villages', r.villages], ['valleys', r.valleys]]) for (const x of l || []) found[k].set(`${x.x}|${x.y}`, x);
+      found.tiles += r.tiles;
+      if (!found.sample.length) found.sample = r.sample || [];
+      found.method = found.method || r.method;
     };
-    const page = async () => {
+    // One map page at `c`, then the others from it, in batches well inside
+    // the wait for an answer. Returns the areas still missing.
+    const pageRead = async (c, rest) => {
       try {
-        await navigate(tabId, `${s.server}/karte.php?zoom=3&x=${v.x}&y=${v.y}`);
-        const { res: r } = await act(tabId, { kind: 'mapTiles' }, false);
-        attempts.push(...(r.diag || []));
-        if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'page', ok: false, error: reasonText(r) });
-        return r;
+        await navigate(tabId, `${s.server}/karte.php?zoom=3&x=${c.x}&y=${c.y}`, 25000); // the map page loads in seconds
+        let left = rest;
+        let last = null;
+        const missing = [];
+        for (let first = true; first || left.length; first = false) {
+          const batch = left.slice(0, 40);
+          left = left.slice(40);
+          const { res: r } = await act(tabId, { kind: 'mapTiles', centers: batch }, false);
+          attempts.push(...(r.diag || []));
+          if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'page', ok: false, error: reasonText(r) });
+          if (!r.ok) { take(last); return last ? [...missing, ...batch, ...left] : [c, ...rest]; }
+          last = r;
+          missing.push(...(r.missing || []));
+          // The game's request can't be reused for other areas: stop asking.
+          if (batch.length && (r.missing || []).length === batch.length) { missing.push(...left); break; }
+        }
+        take(last);
+        return missing;
       } catch (e) {
         if (e.loggedOut) throw e;
         attempts.push({ how: 'page', ok: false, error: e.message });
-        return { ok: false, code: 'mapApi' };
+        return [c, ...rest];
       }
     };
-    const order = account.mapMethod === 'page' ? [page, direct] : [direct, page];
-    let res = await order[0]();
-    if (!ok(res)) {
-      const second = await order[1]();
-      if (ok(second) || !res.ok) res = second;
+    let missing = await pageRead(centers[0], centers.slice(1));
+    // Areas the game's request couldn't be reused for: the map page at each
+    // of them (a few at most).
+    for (let pages = 0; found.tiles && missing.length && pages < 8; pages++) {
+      await sleep(rand(1200, 2500));
+      const [c, ...rest] = missing;
+      const left = await pageRead(c, []);
+      missing = [...rest, ...left.filter((x) => x !== c)];
     }
+    if (!found.tiles) {
+      try {
+        await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(todo[0].id)}`);
+        const { res: r } = await act(tabId, { kind: 'scanMap', centers }, false);
+        attempts.push(...(r.diag || []));
+        if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'request', ok: false, error: reasonText(r) });
+        take(r);
+        if (ok(r)) missing = r.missing || [];
+      } catch (e) {
+        if (e.loggedOut) throw e;
+        attempts.push({ how: 'request', ok: false, error: e.message });
+      }
+    }
+    const res = { ok: found.tiles > 0, tiles: found.tiles, oases: [...found.oases.values()], villages: [...found.villages.values()], valleys: [...found.valleys.values()], method: found.method, sample: found.sample };
     const at = Date.now();
+    const scanned = new Set(todo.map((v) => v.id));
+    const where = todo.map((v) => v.name).join(t('list.sep'));
+    const logVid = todo.length === 1 ? todo[0].id : undefined;
     await update(['raids', 'account'], (d) => {
       // A failed look is tried again in half an hour, not in 12 hours.
-      for (const r of d.raids || []) if (r.villageId === vid) { if (ok(res)) { r.scannedAt = at; r.scanFailAt = null; } else r.scanFailAt = at; }
+      for (const r of d.raids || []) if (scanned.has(r.villageId)) { if (ok(res)) { r.scannedAt = at; r.scanFailAt = null; } else r.scanFailAt = at; }
       d.account = d.account || {};
       d.account.mapDiag = {
-        at, village: v.name, ok: ok(res), method: res.method || null, tiles: res.tiles || 0,
-        oases: (res.oases || []).length, players: (res.villages || []).length, valleys: (res.valleys || []).length,
-        attempts: attempts.slice(0, 20), sample: res.sample || [],
+        at, village: where, areas: centers.length, missing: missing.length, ok: ok(res), method: res.method || null, tiles: res.tiles || 0,
+        oases: res.oases.length, players: res.villages.length, valleys: res.valleys.length,
+        attempts: attempts.slice(0, 24), sample: res.sample || [],
       };
-      if (ok(res)) d.account.mapMethod = res.method === 'page' ? 'page' : 'direct';
+      if (ok(res)) d.account.mapMethod = res.method;
     });
     if (!ok(res)) {
       const why = attempts.map((a) => `${a.how}: ${a.ok ? 'ok' : a.status ? `HTTP ${a.status}` : a.error || '—'}`).join(' · ').slice(0, 220);
-      await log('error', t('log.scanFailed', { reason: why || reasonText(res) }), vid);
+      await log('error', t('log.scanFailed', { reason: why || t('reason.mapApi') }), logVid);
       return;
     }
     const now = Date.now();
@@ -1232,13 +1285,13 @@ const JOBS = {
         d.oases[key] = { ...prev, x: o.x, y: o.y, fromScan: true, scannedAt: now, ...(fresh ? {} : { owned: o.owned, animals: o.animals }) };
       }
     });
-    await log('info', t('log.scanned', { n: res.oases.length }), vid);
+    await log('info', t(todo.length > 1 ? 'log.scannedAll' : 'log.scanned', { n: res.oases.length, v: todo.length }), logVid);
     // Free valleys, for the new-village plan.
     if (res.valleys) {
       await update(['valleys'], (d) => {
         const out = {};
         // Keep what's still recent elsewhere on the map; this area is redrawn.
-        for (const [k, x] of Object.entries(d.valleys || {})) if (now - (x.scannedAt || 0) < 3 * 86400000 && distance(x, v) > 15) out[k] = x;
+        for (const [k, x] of Object.entries(d.valleys || {})) if (now - (x.scannedAt || 0) < 3 * 86400000 && todo.every((v) => distance(x, v) > 15)) out[k] = x;
         for (const x of res.valleys) out[oasisKey(x.x, x.y)] = { ...x, scannedAt: now };
         d.valleys = out;
       });
@@ -1248,7 +1301,7 @@ const JOBS = {
       await update(['mapVillages', 'villages'], (d) => {
         d.mapVillages = recordMapVillages(d.mapVillages, res.villages, now, Object.values(d.villages || {}));
       });
-      await log('info', t('log.scannedVillages', { n: res.villages.length }), vid);
+      await log('info', t('log.scannedVillages', { n: res.villages.length }), logVid);
     }
   },
 
@@ -1609,6 +1662,8 @@ function planActions(s, data, now) {
   if (schedule.scanVillage && villages[schedule.scanVillage]) {
     jobs.push({ type: 'scan', villageId: schedule.scanVillage, asked: true, label: t('job.scan', { v: villages[schedule.scanVillage].name }) });
   }
+  const all = (schedule.scanVillages || []).filter((id) => villages[id]);
+  if (all.length) jobs.push({ type: 'scan', villageIds: all, asked: true, label: t('job.scanAll', { n: all.length }) });
   const farmNow = new Set(schedule.farmNow || []);
   for (const list of farms) {
     if (farmNow.has(list.id) && villages[list.villageId]) jobs.push({ type: 'farmList', listId: list.id, asked: true, label: t('job.farmList', { list: list.name }) });
@@ -2049,8 +2104,13 @@ const COMMANDS = {
     await update(['escapes'], (d) => { d.escapes = (d.escapes || []).filter((x) => x.id !== id); });
     await armEscapes();
   },
+  // A map scan now: around one village, or every village ("all").
   async scanOases({ villageId }) {
-    await patchSchedule({ scanVillage: villageId });
+    if (villageId && villageId !== 'all') await patchSchedule({ scanVillage: villageId });
+    else {
+      const { villages = {} } = await read(['villages']);
+      await patchSchedule({ scanVillages: sortedVillages(villages).map((v) => v.id) });
+    }
     tick(false, true);
   },
   // Inactive finder: scan around a village now, and again every ~12 h
