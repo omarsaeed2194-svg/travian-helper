@@ -49,7 +49,7 @@ export async function command(name, args) {
 // Is the player typing or choosing inside this element? (A focused button
 // or checkbox doesn't count: tables redraw after those are clicked.)
 // The switches that let the bot act in the game (scheduled rules need one).
-export const automationOn = (s) => !!(s && (s.botEnabled || (s.autopilot && s.autopilot.enabled)));
+export const automationOn = (s) => !!(s && (s.botEnabled || (s.autopilot && s.autopilot.enabled) || (s.brain && s.brain.enabled)));
 
 export function editingIn(el) {
   const a = document.activeElement;
@@ -112,7 +112,7 @@ export function statusLine(data, now = Date.now()) {
   if (status.state === 'otherDevice') return { tone: 'warn', text: t('status.otherDevice', { name: status.note }) };
   if (status.state === 'working') return { tone: 'good', text: t('status.working', { note: status.note }) };
   if (status.state === 'paused') return { tone: 'warn', text: t('status.paused') };
-  if (!s.watchEnabled && !s.botEnabled && !s.autopilot.enabled) return { tone: 'muted', text: t('status.off') };
+  if (!s.watchEnabled && !automationOn(s)) return { tone: 'muted', text: t('status.off') };
   const next = schedule.refreshAt ? Math.max(0, schedule.refreshAt - now) : 0;
   const last = status.lastRunAt ? t('status.last', { ago: fmtAgo(status.lastRunAt, now) }) : '';
   const auto = s.autopilot.enabled ? `${t('status.autopilot')} · ` : '';

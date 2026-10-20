@@ -22,7 +22,7 @@ export function renderFinder(d, now) {
   fillSelect($('finderVillage'), villages.map((v) => [v.id, `${v.name} ${coords(v.x, v.y)}`]), chosen || sc.finderVillage || undefined);
   const from = data.villages[$('finderVillage').value];
   const info = trackingInfo(data.mapVillages, now);
-  const auto = data.settings.botEnabled || data.settings.autopilot.enabled;
+  const auto = data.settings.botEnabled || data.settings.autopilot.enabled || data.settings.brain.enabled;
 
   // Where tracking stands.
   const parts = [];

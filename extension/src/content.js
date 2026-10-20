@@ -170,10 +170,13 @@
     if (e.data.source !== 'tvh-map' || !Array.isArray(e.data.tiles)) return;
     addTiles(e.data.tiles);
   });
-  // A few raw tiles (shortened) for the diagnostics report: if the game's
-  // format differs from what the readers expect, this shows how.
-  const sample = (tiles) => tiles.slice(0, 3).map((t) => JSON.stringify(t).slice(0, 400));
-  const readTiles = (tiles) => ({ tiles: tiles.length, oases: P.oasesFromTiles(tiles), villages: P.villagesFromTiles(tiles), valleys: P.valleysFromTiles(tiles), sample: sample(tiles) });
+  // What was read, with a summary of the kinds of tiles and one raw example
+  // of each (shortened) for the diagnostics report: if the game's format
+  // differs from what the readers expect, this shows how.
+  const readTiles = (tiles) => {
+    const sum = P.tileSummary(tiles);
+    return { tiles: tiles.length, oases: P.oasesFromTiles(tiles), villages: P.villagesFromTiles(tiles), valleys: P.valleysFromTiles(tiles), sample: sum.samples, summary: sum.line };
+  };
 
   // The page's own world (pageBridge.js, mapHook.js on the map page):
   // a request there and its answer.

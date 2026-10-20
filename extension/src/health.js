@@ -26,7 +26,7 @@ export function healthReport(data, now = Date.now()) {
   const st = data.status || {};
   const h = data.health || {};
   const villages = sortedVillages(data.villages);
-  const auto = s.botEnabled || s.autopilot.enabled;
+  const auto = s.botEnabled || s.autopilot.enabled || !!(s.brain && s.brain.enabled);
   const busy = s.watchEnabled || auto;
   const sections = [];
 

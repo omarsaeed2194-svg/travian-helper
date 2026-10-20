@@ -77,6 +77,13 @@ export const DEFAULT_SETTINGS = {
   web: { url: '', key: '' },
   // Wounded troops healed in the Hospital, as resources allow.
   heal: { enabled: false, everyMinutes: 60 },
+  // The brain (src/brain.js): runs every village on its own — builds like
+  // the autopilot with field targets that grow with the village, trains
+  // troops with `armyShare` % of what the stores pay for once they fill,
+  // and sends the attack units away from an attack (`defense`). At most
+  // `maxActions` trainings a round, every `everyMinutes` per village.
+  // roles: { villageId: 'auto' | 'economy' | 'military' | 'off' }.
+  brain: { enabled: false, armyShare: 30, maxActions: 3, everyMinutes: 30, defense: true, roles: {} },
 };
 
 export function mergeSettings(saved) {
@@ -107,6 +114,9 @@ function keepInRange(s) {
   fix(s, 'maxQueue', 1, 2, d.maxQueue);
   fix(s.farm, 'intervalMinutes', 5, 1440, d.farm.intervalMinutes);
   fix(s.heal, 'everyMinutes', 10, 720, d.heal.everyMinutes);
+  fix(s.brain, 'armyShare', 5, 90, d.brain.armyShare);
+  fix(s.brain, 'maxActions', 1, 10, d.brain.maxActions);
+  fix(s.brain, 'everyMinutes', 10, 240, d.brain.everyMinutes);
   fix(s.autopilot, 'fieldsMax', 1, 21, d.autopilot.fieldsMax);
   fix(s.alerts, 'storageHours', 0, 48, d.alerts.storageHours);
   return s;
@@ -214,9 +224,10 @@ export function buildStatus(v, data, now = Date.now()) {
   const s = data.settings;
   const st = data.status || {};
   const queued = (data.tasks[v.id] || []).length > 0;
-  const auto = s.autopilot.enabled && s.autopilot.build;
+  const brain = !!(s.brain && s.brain.enabled);
+  const auto = brain || (s.autopilot.enabled && s.autopilot.build);
   if (!queued && !auto) return null;
-  if (!s.botEnabled && !s.autopilot.enabled) return { tone: 'muted', text: t('why.botOff') };
+  if (!s.botEnabled && !s.autopilot.enabled && !brain) return { tone: 'muted', text: t('why.botOff') };
   if (st.state === 'otherDevice') return { tone: 'muted', text: t('why.otherDevice', { name: st.note }) };
   if (st.loggedOut) return { tone: 'bad', text: t('why.loggedOut') };
   if (s.pauseWhenPlaying && (st.userActiveUntil || 0) > now) {

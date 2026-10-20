@@ -42,7 +42,8 @@ export function inactiveCandidates(store, from, { maxDistance = 30, now = Date.n
   for (const v of Object.values(store || {})) (byPlayer[v.uid] = byPlayer[v.uid] || []).push(v);
   const out = [];
   for (const [uid, list] of Object.entries(byPlayer)) {
-    if (Number(uid) <= 1) continue;
+    // Natars: player 1, or by name where the map gives no player ids.
+    if (Number(uid) <= 1 || /natar|ناتار/i.test(list[0].player || '')) continue;
     const judged = list.filter((v) => (v.seen || []).length >= 2 && v.seen[v.seen.length - 1][0] - v.seen[0][0] >= SPAN_MS);
     if (!judged.length) continue;
     if (list.some((v) => (v.seen || []).length >= 2 && v.seen[v.seen.length - 1][1] > v.seen[0][1])) continue; // grew somewhere

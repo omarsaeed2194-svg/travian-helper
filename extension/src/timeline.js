@@ -16,7 +16,7 @@ export function timelineEvents(scope, data, now = Date.now(), hours = 6) {
   const out = [];
   const add = (at, kind, icon, text, v) => { if (at && at > now && at <= end) out.push({ at, kind, icon, text, v: v ? v.id : null, vName: v ? v.name : '' }); };
   const s = data.settings || {};
-  const on = s.botEnabled || (s.autopilot && s.autopilot.enabled);
+  const on = s.botEnabled || (s.autopilot && s.autopilot.enabled) || !!(s.brain && s.brain.enabled);
   const ids = new Set(scope.map((v) => v.id));
 
   for (const v of scope) {

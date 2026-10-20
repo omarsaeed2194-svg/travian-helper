@@ -52,7 +52,7 @@ function renderFilter(villages, data) {
   const lease = data.lease;
   const other = leaseIsFresh(lease) && data.device && lease.deviceId !== data.device.id;
   const st = data.settings;
-  const auto = !st.botEnabled && !st.autopilot.enabled && !st.watchEnabled ? t('ov.autoOff')
+  const auto = !st.botEnabled && !st.autopilot.enabled && !st.brain.enabled && !st.watchEnabled ? t('ov.autoOff')
     : other ? t('ov.autoOther', { name: lease.deviceName })
       : st.autopilot.enabled ? t('ov.autopilotHere') : st.botEnabled ? t('ov.autoHere') : t('ov.watchHere');
   $('ovAccount').innerHTML = [
@@ -295,7 +295,7 @@ function renderNext(scope, data, now) {
   const rows = [];
   const left = (at) => (at && at > now ? fmtDuration(at - now) : t('ov.now'));
   const ap = s.autopilot;
-  const on = s.botEnabled || ap.enabled;
+  const on = s.botEnabled || ap.enabled || s.brain.enabled;
   if (s.watchEnabled || on) rows.push([t('ov.nextCheck'), left(sched.refreshAt)]);
   const plan = s.expansion.enabled ? expansionPlan(data, now) : null;
   for (const v of scope) {

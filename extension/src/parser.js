@@ -346,15 +346,16 @@
       const pos = tile.position || tile;
       const title = plain(tile.title);
       const body = plain(tile.text);
-      // "{k.fo}"/"{k.bt}" in the title; else did -1 with animals or an
-      // oasis bonus in the text (servers whose titles differ).
-      const oasis = /\{k\.(fo|bt)\}/.test(title) || (tile.did === -1 && !/\{k\.vt\}/.test(title) && /unit u(3\d|40)\b|\{a\.r\d\}|\{k\.animals\}/.test(body));
+      const all = `${title} ${body}`;
+      // "{k.fo}"/"{k.bt}" in the title or (servers whose titles are the
+      // region's name) in the text; else did -1, or animals in the text.
+      const oasis = /\{k\.(fo|bt)\}/.test(all) || ((tile.did === -1 || /unit u(3[1-9]|40)\b/.test(body)) && !/\{k\.vt\}/.test(all) && !(tile.did > 0));
       if (!oasis || pos.x == null || pos.y == null) continue;
       let animals = 0;
       for (const m of body.matchAll(/unit u(\d+)\b[\s\S]*?class="value[^"]*"[^>]*>\s*([\d,.\s]+)</g)) animals += num(m[2]) || 0;
       out.push({
         x: Number(pos.x), y: Number(pos.y),
-        owned: /\{k\.bt\}/.test(title) || !!(tile.uid && tile.uid > 0),
+        owned: /\{k\.bt\}/.test(all) || !!(tile.uid && tile.uid > 0),
         animals,
       });
     }
@@ -450,12 +451,33 @@
     const out = [];
     for (const tile of tiles || []) {
       const pos = tile.position || tile;
-      const all = `${tile.title || ''} ${tile.text || ''}`;
-      if (pos.x == null || pos.y == null || !/\{k\.vt\}/.test(all) || tile.uid > 0 || tile.did > 0) continue;
+      const all = `${plain(tile.title)} ${plain(tile.text)}`;
+      if (pos.x == null || pos.y == null || !/\{k\.vt\}/.test(all) || tile.uid > 0 || tile.did > 0 || /\{k\.spieler\}/.test(all)) continue;
       const f = all.match(/\{k\.f(\d+)\}/);
       out.push({ x: Number(pos.x), y: Number(pos.y), type: f ? Number(f[1]) : null });
     }
     return out;
+  }
+
+  // What kinds of tiles a map answer holds, for the diagnostics report: how
+  // many carry ids, which "{k.…}" markers appear how often, and one example
+  // (shortened) of each kind, so a server's own format shows.
+  function tileSummary(tiles) {
+    const markers = {};
+    let did = 0, didNeg = 0, uid = 0;
+    const kinds = new Map();
+    for (const tile of tiles || []) {
+      if (!tile || typeof tile !== 'object') continue;
+      if ('did' in tile) did += 1;
+      if (tile.did === -1) didNeg += 1;
+      if (tile.uid > 0) uid += 1;
+      const found = [...new Set(`${tile.title || ''} ${tile.text || ''}`.match(/\{[ak]\.[a-zA-Z0-9]+\}/g) || [])];
+      for (const m of found) markers[m] = (markers[m] || 0) + 1;
+      const sig = `${Object.keys(tile).sort().join(',')}#${found.filter((m) => !/regionTooltip|distance/.test(m)).sort().join('')}`;
+      if (!kinds.has(sig) && kinds.size < 8) kinds.set(sig, JSON.stringify(tile).slice(0, 500));
+    }
+    const top = Object.entries(markers).sort((a, b) => b[1] - a[1]).slice(0, 16).map(([m, n]) => `${m}×${n}`).join(' ');
+    return { line: `tiles ${(tiles || []).length} · with did ${did} (did -1: ${didNeg}) · with uid ${uid} · markers ${top || '—'}`, samples: [...kinds.values()] };
   }
 
   // Player villages from the same map answer: the tooltip text carries
@@ -467,20 +489,27 @@
     const strip = (s) => decode(plain(s).replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
     for (const tile of tiles || []) {
       const pos = tile.position || tile;
-      if (pos.x == null || pos.y == null || !(tile.uid > 0) || !(tile.did > 0)) continue;
       const body = plain(tile.text);
+      const all = `${plain(tile.title)} ${body}`;
+      // A player's village: its ids, or (servers that leave them out) the
+      // player and population lines in the text.
+      const village = (tile.uid > 0 && tile.did > 0) || (/\{k\.spieler\}/.test(all) && /\{k\.einwohner\}/.test(all));
+      if (pos.x == null || pos.y == null || !village) continue;
       const field = (key) => {
-        const m = body.match(new RegExp('\\{k\\.' + key + '\\}([^<{]*)'));
+        const m = all.match(new RegExp('\\{k\\.' + key + '\\}([^<{]*)'));
         return m ? strip(m[1]) : null;
       };
       const pop = num(field('einwohner'));
       if (pop == null) continue;
+      const player = field('spieler') || '';
+      // The title is the village's name, unless it is the region's ("{k.regionTooltip} …").
+      const title = String(tile.title || '');
+      const name = /\{k\.regionTooltip\}/.test(title) ? field('dt') || '' : strip(title.replace(/\{k\.\w+\}/g, ''));
       out.push({
-        x: Number(pos.x), y: Number(pos.y), did: tile.did, uid: tile.uid, aid: tile.aid || 0,
-        name: strip(String(tile.title || '').replace(/\{k\.\w+\}/g, '')),
-        player: field('spieler') || '',
-        alliance: field('allianz') || '',
-        pop,
+        x: Number(pos.x), y: Number(pos.y),
+        // Without ids: the spot stands for the village, the name for the player.
+        did: tile.did > 0 ? tile.did : `${pos.x}|${pos.y}`, uid: tile.uid > 0 ? tile.uid : `p:${player}`, aid: tile.aid || 0,
+        name, player, alliance: field('allianz') || '', pop,
       });
     }
     return out;
@@ -610,7 +639,7 @@
   const api = {
     num, parsePage, parseResources, parseVillages, parseBuildQueue, parseFields, parseBuildings, parseMovements,
     parseBuildPage, parseFarmLists, parseHero, pageType, parseTroops, parseTrainingQueue, parseTile, parseSendPage,
-    oasesFromTiles, villagesFromTiles, valleysFromTiles, findTiles, shapeOf, unitOf, parseNewBuildings, parseQuests, parseInventory, parseReports, parseExpansion,
+    oasesFromTiles, villagesFromTiles, valleysFromTiles, tileSummary, findTiles, shapeOf, unitOf, parseNewBuildings, parseQuests, parseInventory, parseReports, parseExpansion,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TravianParser = api;

@@ -39,7 +39,7 @@ function renderExpansion(now) {
   const plan = expansionPlan(data, now);
   const ex = data.account.expansion;
   $('expMeta').textContent = plan.enabled && ex && ex.total != null ? t('exp.slotsFree', { n: plan.slotsFree }) : '';
-  const auto = s.autopilot.enabled && s.autopilot.build && (s.botEnabled || s.autopilot.enabled);
+  const auto = s.brain.enabled || (s.autopilot.enabled && s.autopilot.build);
   $('expWarn').hidden = !plan.enabled || auto;
   $('expWarn').textContent = t('exp.needAuto');
   const head = ['th.village', 'exp.th.home', 'exp.th.settlers', 'exp.th.step', 'exp.th.target'].map((k) => `<th>${esc(t(k))}</th>`).join('');

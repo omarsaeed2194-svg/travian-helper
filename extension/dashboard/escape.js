@@ -36,7 +36,7 @@ function renderTable(now) {
     return `<tr class="${p.enabled === false ? 'off' : ''}">
       <td>${v.underAttack ? '⚔ ' : ''}${esc(v.name)}</td>
       <td>${esc(p.troops === false ? '—' : to)}</td>
-      <td>${esc(units)}${p.hero ? ` <span class="tag">${esc(t('escape.heroTag'))}</span>` : ''}${p.spend ? ` <span class="tag">${esc(t('escape.spendTag'))}</span>` : ''}${p.donate ? ` <span class="tag">${esc(t('donate.tag', { n: p.donate.seconds }))}</span>` : ''}</td>
+      <td>${esc(units)}${p.hero ? ` <span class="tag">${esc(t('escape.heroTag'))}</span>` : ''}${p.spend ? ` <span class="tag">${esc(t('escape.spendTag'))}</span>` : ''}${p.brain ? ` <span class="tag">${esc(t('brain.tag'))}</span>` : ''}${p.donate ? ` <span class="tag">${esc(t('donate.tag', { n: p.donate.seconds }))}</span>` : ''}</td>
       <td class="mono">${esc(t('escape.leadValue', { n: p.leadSeconds }))}</td>
       <td><span class="${toneClass(st)}">${p.troops === false ? '💰 ' : ''}${esc(st.text)}</span>${dn ? `<br><span class="${toneClass(dn)}">💰 ${esc(dn.text)}</span>` : ''}</td>
       <td><label class="switch"><input type="checkbox" data-esc-toggle="${esc(p.id)}" ${p.enabled === false ? '' : 'checked'}></label></td>

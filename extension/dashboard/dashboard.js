@@ -6,6 +6,7 @@ import { renderFarms } from './farms.js';
 import { renderFinder } from './finder.js';
 import { renderCulture } from './culture.js';
 import { renderEscapes } from './escape.js';
+import { renderBrain } from './brain.js';
 import { leaseIsFresh } from '../src/sync.js';
 import { webBase } from '../src/web.js';
 import { unitIcon, tribeBase } from '../src/units.js';
@@ -28,12 +29,12 @@ const NAV = [
   { tabs: ['overview'] },
   { group: 'nav.gEconomy', tabs: ['build', 'culture'] },
   { group: 'nav.gArmy', tabs: ['troops', 'defense', 'farms', 'oasis'] },
-  { group: 'nav.gAuto', tabs: ['autopilot', 'hero'] },
+  { group: 'nav.gAuto', tabs: ['brain', 'autopilot', 'hero'] },
   { group: 'nav.gSystem', tabs: ['alerts', 'settings', 'health', 'log'] },
 ];
 const ICONS = {
   overview: '🏠', build: '🏗', culture: '🏛', troops: '⚔', defense: '🛡', farms: '🐎', oasis: '🌿',
-  autopilot: '🤖', hero: '🦸', alerts: '🔔', settings: '⚙', health: '🩺', log: '📜',
+  brain: '🧠', autopilot: '🤖', hero: '🦸', alerts: '🔔', settings: '⚙', health: '🩺', log: '📜',
 };
 const RELATED = {
   build: ['culture', 'autopilot'],
@@ -42,7 +43,8 @@ const RELATED = {
   defense: ['troops', 'alerts'],
   farms: ['oasis', 'troops', 'autopilot'],
   oasis: ['farms', 'autopilot'],
-  autopilot: ['build', 'culture', 'hero', 'farms', 'oasis'],
+  brain: ['autopilot', 'troops', 'defense', 'build'],
+  autopilot: ['brain', 'build', 'culture', 'hero', 'farms', 'oasis'],
   hero: ['autopilot', 'overview'],
   alerts: ['defense', 'health'],
   settings: ['alerts', 'health'],
@@ -534,6 +536,7 @@ function render() {
   safely('farms', () => renderFarms(data, now));
   safely('finder', () => renderFinder(data, now));
   safely('escapes', () => renderEscapes(data, now));
+  safely('brain', () => renderBrain(data, now));
   safely('raids', () => renderRaids(now));
   safely('log', () => renderLog());
   fillSettings();

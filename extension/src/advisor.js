@@ -164,7 +164,7 @@ export function adviseAccount(data, now = Date.now()) {
   const s = data.settings;
   const hero = data.account.hero || {};
   if (data.status.loggedOut) add('critical', 'alert', t('status.loggedOut'));
-  if (!s.watchEnabled && !s.botEnabled && !s.autopilot.enabled) {
+  if (!s.watchEnabled && !s.botEnabled && !s.autopilot.enabled && !(s.brain && s.brain.enabled)) {
     add('warning', 'alert', t('tip.watchOff'), { type: 'setting', label: t('tip.actEnable'), patch: { watchEnabled: true } });
   } else if (!s.telegram.token && !s.discord.webhookUrl) {
     add('info', 'alert', t('tip.phone'), { type: 'tab', tab: 'alerts', label: t('tip.actSetup') });

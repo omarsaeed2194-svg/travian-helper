@@ -38,7 +38,7 @@ function render() {
   $('status').textContent = st.text;
 
   // Quick actions.
-  const running = s.botEnabled || s.autopilot.enabled;
+  const running = s.botEnabled || s.autopilot.enabled || s.brain.enabled;
   $('qaPause').innerHTML = running ? `<span aria-hidden="true">⏸</span> ${esc(t('qa.pause'))}` : `<span aria-hidden="true">▶</span> ${esc(t('qa.resume'))}`;
   $('qaPause').dataset.action = running ? 'pause' : 'resume';
   const lists = data.farms.filter((l) => l.enabled !== false && (l.targets || []).some((x) => x.enabled !== false));
