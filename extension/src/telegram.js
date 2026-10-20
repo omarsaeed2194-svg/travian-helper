@@ -10,14 +10,18 @@ import { expansionEta } from './culture.js';
 const WORDS = {
   status: ['status', 'state', 'الحالة', 'حالة', 'الوضع'],
   pause: ['pause', 'stop', 'وقف', 'وقّف', 'ايقاف', 'إيقاف', 'اوقف', 'أوقف'],
-  resume: ['resume', 'start', 'go', 'شغل', 'شغّل', 'تشغيل', 'كمل', 'كمّل'],
+  resume: ['resume', 'go', 'شغل', 'شغّل', 'تشغيل', 'كمل', 'كمّل'],
   check: ['check', 'refresh', 'افحص', 'فحص'],
   farms: ['farms', 'farm', 'raid', 'مزارع', 'المزارع', 'ارسل', 'أرسل', 'غارات'],
   escape: ['escape', 'dodge', 'اهرب', 'هروب', 'اهربوا'],
   summary: ['summary', 'report', 'ملخص', 'تقرير'],
-  help: ['help', 'commands', 'start_help', 'مساعدة', 'اوامر', 'أوامر', 'الاوامر', 'الأوامر'],
+  help: ['help', 'commands', 'start', 'start_help', 'مساعدة', 'اوامر', 'أوامر', 'الاوامر', 'الأوامر'],
 };
-const strip = (s) => s.replace(/[ً-ْ]/g, '').toLowerCase(); // drop Arabic diacritics
+// Spelling that varies when typed: diacritics and tatweel, direction marks,
+// alef forms, ة/ه and ى/ي, and punctuation at the end ("الحالة؟").
+const strip = (s) => s.replace(/[\u064b-\u0652\u0640\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+  .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+  .replace(/[؟?!.,،:;]+$/, '').toLowerCase();
 
 export function parseCommand(text) {
   const word = strip(String(text || '').trim().replace(/^\//, '').split(/[\s@]/)[0]);

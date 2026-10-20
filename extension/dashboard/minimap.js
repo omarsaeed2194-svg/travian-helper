@@ -66,7 +66,7 @@ export function minimapSvg(data, scopeIds, size = 300) {
   const title = (s) => `<title>${esc(s)}</title>`;
   const oasisMarks = oases.map((o) => {
     const raided = raidKeys.has(`${o.x}|${o.y}`);
-    const a = Object.values(o.animals || {}).reduce((n, x) => n + (Number(x) || 0), 0);
+    const a = typeof o.animals === 'object' && o.animals ? Object.values(o.animals).reduce((n, x) => n + (Number(x) || 0), 0) : Number(o.animals) || 0;
     const d = r * (raided ? 0.9 : 0.6);
     return `<g class="mm-oasis${raided ? ' raided' : ''}${o.owned ? ' owned' : ''}">${title(`${t('mm.oasis')} ${coords(o.x, o.y)}${a ? ` · ${t('mm.animals', { n: a })}` : ''}${raided ? ` · ${t('mm.raided')}` : ''}`)}<path d="M${px(o)} ${(py(o) - d).toFixed(1)}l${d} ${d}-${d} ${d}-${d}-${d}z"/></g>`;
   });

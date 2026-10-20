@@ -89,7 +89,27 @@ export function mergeSettings(saved) {
       out[k] = v;
     }
   }
-  return out;
+  return keepInRange(out);
+}
+
+// Numbers that would make the bot run wild (every minute, negative waits)
+// are brought back into range, whatever saved them.
+function keepInRange(s) {
+  const fix = (obj, key, min, max, def) => {
+    if (!obj) return;
+    const n = Number(obj[key]);
+    obj[key] = obj[key] !== '' && obj[key] != null && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+  };
+  const d = DEFAULT_SETTINGS;
+  fix(s, 'refreshMinutes', 3, 240, d.refreshMinutes);
+  fix(s, 'jitterPercent', 0, 60, d.jitterPercent);
+  fix(s, 'pauseMinutes', 1, 240, d.pauseMinutes);
+  fix(s, 'maxQueue', 1, 2, d.maxQueue);
+  fix(s.farm, 'intervalMinutes', 5, 1440, d.farm.intervalMinutes);
+  fix(s.heal, 'everyMinutes', 10, 720, d.heal.everyMinutes);
+  fix(s.autopilot, 'fieldsMax', 1, 21, d.autopilot.fieldsMax);
+  fix(s.alerts, 'storageHours', 0, 48, d.alerts.storageHours);
+  return s;
 }
 
 export const capacityFor = (res, k) => (k === 'crop' ? res.capacity.granary : res.capacity.warehouse);
@@ -152,7 +172,8 @@ export function withinActiveHours(cfg, date = new Date()) {
   const toMin = (s) => { const [h, m] = String(s).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const now = date.getHours() * 60 + date.getMinutes();
   const from = toMin(cfg.from), to = toMin(cfg.to);
-  return from <= to ? now >= from && now < to : now >= from || now < to;
+  if (from === to) return true; // 00:00–00:00: the whole day
+  return from < to ? now >= from && now < to : now >= from || now < to;
 }
 
 export function sortedVillages(villages) {

@@ -5,6 +5,8 @@
 // it and the Culture page shows it.
 import { troopsHome, distance } from './autopilot.js';
 import { unitKind } from './units.js';
+import { costOf } from './culture.js';
+import { RESOURCES, capacityFor } from './shared.js';
 
 export const SETTLERS = 3;
 export const SLOT_LEVEL = 10;
@@ -71,7 +73,9 @@ export function expansionPlan(data, now = Date.now()) {
     else if (st.skip) step = 'skipped';
     else if (st.noSlotAt && now - st.noSlotAt < RETRY_MS) step = 'noSlot';
     else if (set.home >= SETTLERS) step = 'ready';
-    else if (st.readyCount && now - (st.readyAt || 0) < SENT_MS) step = 'sent';
+    // Gone from home after being ready: on their way (counted from when
+    // they left; until that is noted, from now).
+    else if (st.readyCount && !(st.sentAt && now - st.sentAt >= SENT_MS)) step = 'sent';
     else if (set.home + set.training >= SETTLERS) step = 'training';
     else if (!home || home.level < SLOT_LEVEL) step = 'residence';
     else step = 'train';
@@ -84,7 +88,8 @@ export function expansionPlan(data, now = Date.now()) {
   const rank = { ready: 0, training: 1, train: 2, residence: 3 };
   const open = rows.filter((r) => r.step in rank).sort((a, b) => rank[a.step] - rank[b.step] || ((b.home && b.home.level) || 0) - ((a.home && a.home.level) || 0));
   const active = new Set(open.slice(0, Math.max(1, slotsFree)).map((r) => r.id));
-  const taken = new Set();
+  // Where settlers already went (or were meant to) is taken.
+  const taken = new Set(rows.filter((r) => r.step === 'sent' && r.st.target).map((r) => `${r.st.target.x}|${r.st.target.y}`));
   for (const r of rows) {
     if (!(r.step in rank)) continue;
     if (!active.has(r.id)) { r.step = 'later'; continue; }
@@ -100,17 +105,30 @@ export function expansionPlan(data, now = Date.now()) {
 
 // For the autopilot: what to build in this village for the plan (the
 // Residence up to 10, or the Main Building to 5 first), or null.
-export function expansionBuild(v, plan, tribeBase = null) {
+// `skip`: sites and building kinds the game refused lately (the autopilot's
+// skip lists), so a refused Residence isn't tried again every minute.
+export function expansionBuild(v, plan, tribeBase = null, skip = {}) {
   const r = plan && plan.enabled && plan.rows.find((x) => x.id === v.id);
   if (!r || r.step !== 'residence' || !v.buildings) return null;
+  const slots = skip.slots || [], gids = skip.gids || [];
   if (r.home) {
-    if (r.home.busy) return null;
+    if (r.home.busy || slots.includes(r.home.slot)) return null;
+    // The next level costs more than the storage holds: the store first.
+    const cost = costOf(r.home.gid, r.home.level + 1);
+    const short = cost && v.resources && RESOURCES.find((k) => (cost[k] || 0) > (capacityFor(v.resources, k) || Infinity));
+    if (short) {
+      const gidStore = short === 'crop' ? 11 : 10;
+      const store = (v.buildings || []).filter((b) => b.gid === gidStore && !b.underConstruction && b.level < 20 && !slots.includes(b.slot)).sort((a, b) => a.level - b.level)[0];
+      return store ? { slot: store.slot, gid: gidStore, level: store.level, why: 'expansion' } : null;
+    }
     return { slot: r.home.slot, gid: r.home.gid, level: r.home.level, why: 'expansion' };
   }
   const main = (v.buildings || []).filter((b) => b.gid === 15).sort((a, b) => (b.level || 0) - (a.level || 0))[0];
-  if (!main || (main.level || 0) < 5) return main && !main.underConstruction ? { slot: main.slot, gid: 15, level: main.level || 0, why: 'expansion' } : null;
-  const site = v.buildings.filter((b) => !b.gid && b.slot >= 19 && b.slot <= 38).map((b) => b.slot).sort((a, b) => a - b)[0];
-  return site ? { slot: site, gid: tribeBase === 60 ? 44 : 25, level: 0, why: 'expansion', construct: true } : null;
+  if (!main || (main.level || 0) < 5) return main && !main.underConstruction && !slots.includes(main.slot) ? { slot: main.slot, gid: 15, level: main.level || 0, why: 'expansion' } : null;
+  const gid = tribeBase === 60 ? 44 : 25;
+  if (gids.includes(gid)) return null;
+  const site = v.buildings.filter((b) => !b.gid && b.slot >= 19 && b.slot <= 38 && !slots.includes(b.slot)).map((b) => b.slot).sort((a, b) => a - b)[0];
+  return site ? { slot: site, gid, level: 0, why: 'expansion', construct: true } : null;
 }
 
 // Valley layouts the map names "{k.f1}" … "{k.f12}": wood-clay-iron-crop.
@@ -121,8 +139,12 @@ export const VALLEY_FIELDS = {
 
 // A founding is noticed when the player has more villages than when this
 // village's settlers were ready, and its settlers are gone.
-export function foundedNow(st, v, villageCount, now = Date.now()) {
+// With the target noted when they were ready, only a village of the
+// player's on that spot counts (another founding or a conquest doesn't).
+export function foundedNow(st, v, villageCount, now = Date.now(), villages = null) {
   if (!st || st.founded || !st.readyCount) return false;
   const set = settlersOf(v, now);
-  return villageCount > st.readyCount && set.home < SETTLERS;
+  if (set.home >= SETTLERS) return false;
+  if (st.target && villages) return villages.some((x) => x.x === st.target.x && x.y === st.target.y);
+  return villageCount > st.readyCount;
 }

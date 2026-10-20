@@ -88,8 +88,9 @@ export function canAfford(v, cost, now = Date.now()) {
 // doesn't hide a good building. Skips what the storage can't pay for.
 export function bestCpUpgrade(v, { skip = [], skipGids = [] } = {}) {
   if (!v.buildings) return null;
-  const cap = v.resources ? Math.min(...RESOURCES.map((k) => capacityFor(v.resources, k) || Infinity)) : Infinity;
-  const fits = (cost) => RESOURCES.every((k) => (cost[k] || 0) <= cap);
+  // Each resource against its own store (warehouse, or granary for crop).
+  const capOf = (k) => (v.resources ? capacityFor(v.resources, k) || Infinity : Infinity);
+  const fits = (cost) => RESOURCES.every((k) => (cost[k] || 0) <= capOf(k));
   const score = (gid, from) => {
     const top = maxLevel(gid);
     if (from >= top) return null;

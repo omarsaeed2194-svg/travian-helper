@@ -8,7 +8,7 @@ import { escapeStatus, donateStatus } from './escape.js';
 
 export { escapeStatus };
 
-export const STORAGE_KEYS = ['settings', 'villages', 'account', 'tasks', 'training', 'raids', 'farms', 'escapes', 'oases', 'schedule', 'status', 'log', 'device', 'syncState', 'history', 'health', 'stats', 'mapVillages', 'valleys', 'expansion'];
+export const STORAGE_KEYS = ['settings', 'villages', 'account', 'tasks', 'training', 'raids', 'farms', 'escapes', 'oases', 'schedule', 'status', 'log', 'device', 'syncState', 'history', 'health', 'stats', 'mapVillages', 'valleys', 'expansion', 'diag'];
 
 export async function loadAll() {
   const data = await chrome.storage.local.get(STORAGE_KEYS);
@@ -30,6 +30,7 @@ export async function loadAll() {
   data.mapVillages = data.mapVillages || {};
   data.valleys = data.valleys || {};
   data.expansion = data.expansion || {};
+  data.diag = data.diag || {};
   applyTheme(data.settings.theme);
   try {
     data.lease = (await chrome.storage.sync.get('lease')).lease || null;
@@ -43,6 +44,16 @@ export async function command(name, args) {
   const res = await chrome.runtime.sendMessage({ type: 'COMMAND', name, args });
   if (!res || !res.ok) throw new Error((res && res.error) || 'No response from background');
   return res.result;
+}
+
+// Is the player typing or choosing inside this element? (A focused button
+// or checkbox doesn't count: tables redraw after those are clicked.)
+// The switches that let the bot act in the game (scheduled rules need one).
+export const automationOn = (s) => !!(s && (s.botEnabled || (s.autopilot && s.autopilot.enabled)));
+
+export function editingIn(el) {
+  const a = document.activeElement;
+  return !!a && !!el && el.contains(a) && a.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="button"]), select, textarea');
 }
 
 // Replace a <select>'s options only when they changed, keeping the choice.

@@ -1,4 +1,4 @@
-import { loadAll, command, statusLine, esc, fillSelect, troopInfo, initTheme, nextTheme, themeIcon, THEMES } from '../src/ui.js';
+import { loadAll, command, statusLine, esc, fillSelect, troopInfo, initTheme, nextTheme, themeIcon, THEMES, editingIn, automationOn } from '../src/ui.js';
 import { renderHealth } from './health.js';
 import { renderOverview } from './overview.js';
 import { renderAutopilot } from './autopilot.js';
@@ -108,8 +108,13 @@ async function saveSetting(el) {
   const path = el.dataset.setting.split('.');
   let value = el.type === 'checkbox' ? el.checked : el.value;
   if (el.type === 'number' || el.dataset.setting === 'maxQueue') {
+    // An emptied box keeps the saved value; others stay within the box's limits.
+    if (String(el.value).trim() === '') { el.value = getPath(data.settings, el.dataset.setting) ?? ''; return; }
     value = Number(value);
     if (!Number.isFinite(value)) return;
+    if (el.min !== '' && el.min != null && value < Number(el.min)) value = Number(el.min);
+    if (el.max !== '' && el.max != null && value > Number(el.max)) value = Number(el.max);
+    el.value = value;
   }
   if (el.dataset.setting === 'telegram.summaryHour') value = Number(value);
   const top = path[0];
@@ -177,9 +182,9 @@ function renderBuild(now, force) {
     : `<li class="empty muted">${esc(t('build.emptyQueue'))}</li>`;
 
   renderNewBuilding(v);
-  if (force || !$('fieldTable').contains(document.activeElement)) $('fieldTable').innerHTML = upgradeTable(v.fields, 'fields');
+  if (force || !editingIn($('fieldTable'))) $('fieldTable').innerHTML = upgradeTable(v.fields, 'fields');
   const buildings = (v.buildings || []).filter((b) => b.gid > 0);
-  if (force || !$('buildingTable').contains(document.activeElement)) $('buildingTable').innerHTML = upgradeTable(v.buildings ? buildings : null, 'buildings');
+  if (force || !editingIn($('buildingTable'))) $('buildingTable').innerHTML = upgradeTable(v.buildings ? buildings : null, 'buildings');
 }
 
 // New building on a free site: rally point only on 39, the wall only on 40,
@@ -208,7 +213,12 @@ $('addNewBuilding').addEventListener('click', () => {
 
 $('buildVillage').addEventListener('change', (e) => { buildVillageId = e.target.value; render(); });
 // Tips can open the Build tab on a specific village.
-window.addEventListener('tvh:select-village', (e) => { buildVillageId = e.detail; render(); });
+window.addEventListener('tvh:select-village', (e) => {
+  buildVillageId = e.detail;
+  // The Troops tab's village too (the "train troops" tip opens it).
+  if ([...$('trainVillage').options].some((o) => o.value === e.detail)) $('trainVillage').value = e.detail;
+  render();
+});
 window.addEventListener('tvh:rerender', () => { if (data) renderTicking(Date.now()); });
 window.addEventListener('tvh:rerender-all', () => render());
 $('addFieldsTask').addEventListener('click', () => {
@@ -243,7 +253,7 @@ function unitOptions(v, gid) {
 function unitName(rule) {
   const v = data.villages[rule.villageId];
   const u = v && v.units && v.units[rule.gid] && v.units[rule.gid].find((x) => x.field === rule.troop);
-  return u && u.name ? u.name : t('troops.unitN', { n: rule.troop.slice(1) });
+  return u && u.name ? u.name : t('troops.unitN', { n: String(rule.troop || '').slice(1) });
 }
 
 // Troops at home and in training, per village.
@@ -275,7 +285,7 @@ function renderTroops(now) {
     ? `<tr>${head}<th></th></tr>` +
       rules.map((r) => {
         const village = data.villages[r.villageId];
-        const next = r.nextAt && r.nextAt > now ? fmtDuration(r.nextAt - now) : t('troops.due');
+        const next = r.nextAt && r.nextAt > now ? fmtDuration(r.nextAt - now) : automationOn(data.settings) ? t('troops.due') : t('troops.needsAuto');
         return `<tr>
           <td>${esc(village ? village.name : t('troops.gone'))}</td>
           <td>${esc(buildingName(r.gid))}</td>
@@ -302,7 +312,7 @@ function renderHeal(now) {
     const q = ((v.trainingQueue || {})[46] || {}).items || [];
     const healing = q.filter((x) => !x.finishAt || x.finishAt > now);
     const inCare = healing.length ? healing.map((x) => `<span class="unit-chip">${unitIcon(x.unit)} ${x.count} × ${esc(x.name || x.unit)} <small class="mono muted">${x.finishAt ? fmtDuration(x.finishAt - now) : ''}</small></span>`).join('') : '—';
-    const next = !data.settings.heal.enabled ? '—' : v.healAt && v.healAt > now ? fmtDuration(v.healAt - now) : t('troops.due');
+    const next = !data.settings.heal.enabled ? '—' : v.healAt && v.healAt > now ? fmtDuration(v.healAt - now) : automationOn(data.settings) ? t('troops.due') : t('troops.needsAuto');
     return `<tr><td>${esc(v.name)}</td><td>${wounded}</td><td>${inCare}</td><td class="muted small">${esc(v.woundedAt ? fmtAgo(v.woundedAt, now) : '—')}</td><td class="mono">${esc(next)}</td></tr>`;
   }).join('');
   $('healTable').innerHTML = `<tr>${head}</tr>${rows}`;
@@ -341,7 +351,7 @@ function renderRaids(now) {
 
   const hero = data.account.hero || {};
   const items = [
-    [t('hero.status'), t(hero.home ? 'hero.home' : 'hero.away')],
+    [t('hero.status'), hero.home == null ? '—' : t(hero.home ? 'hero.home' : 'hero.away')],
     [t('hero.adventures'), hero.adventures ?? '—'],
     [t('hero.lastSeen'), fmtAgo(data.account.updatedAt, now)],
   ];
@@ -361,7 +371,7 @@ $('testAlert').addEventListener('click', async () => {
   $('testResult').textContent = t('alerts.sending');
   try {
     const r = await command('testAlert');
-    if (!r.sent) $('testResult').textContent = t('alerts.testDesktopOnly');
+    if (!r.sent) $('testResult').textContent = r.desktop === false ? t('alerts.testNothing') : t('alerts.testDesktopOnly');
     else if (r.failed.length) $('testResult').textContent = t('alerts.testFailed', { list: r.failed.join(t('list.sep')) });
     else $('testResult').textContent = t('alerts.testSent', { n: r.sent });
   } catch (e) {
@@ -477,18 +487,24 @@ $('checkNow').addEventListener('click', async (e) => {
   setTimeout(() => { e.target.disabled = false; }, 3000);
 });
 
+// One panel that fails (odd data from the game, a rule from an old
+// version) mustn't stop the others, the settings and the log from showing.
+function safely(name, fn) {
+  try { fn(); } catch (e) { console.error(`render ${name}:`, e); }
+}
+
 function renderTicking(now) {
   const st = statusLine(data, now);
   $('status').className = `status ${st.tone}`;
   $('status').textContent = st.text;
-  renderOverview(data, now);
-  renderBuildWhy(now);
-  renderSync(now);
-  renderWeb(now);
-  renderTroopTable(now);
-  renderHeal(now);
-  renderHealth(data, now);
-  renderCulture(data, now);
+  safely('overview', () => renderOverview(data, now));
+  safely('buildWhy', () => renderBuildWhy(now));
+  safely('sync', () => renderSync(now));
+  safely('web', () => renderWeb(now));
+  safely('troopTable', () => renderTroopTable(now));
+  safely('heal', () => renderHeal(now));
+  safely('health', () => renderHealth(data, now));
+  safely('culture', () => renderCulture(data, now));
 }
 
 function render() {
@@ -512,14 +528,14 @@ function render() {
   $('themeBtn').setAttribute('aria-label', $('themeBtn').title);
   $('serverFull').textContent = data.settings.server || t('settings.notDetected');
   renderTicking(now);
-  renderBuild(now, langChanged);
-  renderTroops(now);
-  renderAutopilot(data, now);
-  renderFarms(data, now);
-  renderFinder(data, now);
-  renderEscapes(data, now);
-  renderRaids(now);
-  renderLog();
+  safely('build', () => renderBuild(now, langChanged));
+  safely('troops', () => renderTroops(now));
+  safely('autopilot', () => renderAutopilot(data, now));
+  safely('farms', () => renderFarms(data, now));
+  safely('finder', () => renderFinder(data, now));
+  safely('escapes', () => renderEscapes(data, now));
+  safely('raids', () => renderRaids(now));
+  safely('log', () => renderLog());
   fillSettings();
 }
 

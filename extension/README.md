@@ -274,7 +274,17 @@ themselves. Save them first:
   while you play, builders busy until…, waiting for resources…). "Check now"
   retries queued upgrades immediately.
 - **Active hours** (optional): limit automation to a time window. Watching and
-  alerts keep running outside it.
+  alerts keep running outside it. 00:00–00:00 means the whole day.
+- **When something fails:** a job that hits an error waits 10 minutes before
+  it is tried again (5 for the village check), instead of every minute. "Pause
+  all" or switching automation off stops a run that is already going. An
+  attack that appears in the middle of a long run starts the escape plan at
+  once. A page that isn't the game's (a captcha, maintenance) is reported
+  straight away with its title.
+- **The bot tab in the background:** Chrome slows chained timers in a hidden
+  tab to one a minute after five minutes. The extension's waits are built so
+  they don't chain, so multi-step actions (sending troops, donating, the hero
+  bag, quests) run at normal speed in the pinned tab.
 - Everything is stored locally in Chrome (`chrome.storage.local`). Nothing is
   sent anywhere except the alerts you configure (to Telegram/Discord).
 
@@ -294,7 +304,12 @@ themselves. Save them first:
   automated).
 - If Travian changes its page layout, parts of it may stop working until the
   selectors in `src/parser.js` and `src/content.js` are updated. Watch the
-  **Activity log** for errors.
+  **Activity log** for errors, and use **Bot health → Copy report** to send
+  what happened (no passwords, tokens or keys are in it).
+- **Map scans** read up to 77 tiles around a village (one map answer covers
+  ±15, so a bigger raid or finder radius takes several requests). Numbers in
+  the map's tooltips are written with direction marks on right-to-left
+  servers; the extension removes them before reading animals and population.
 
 ## Files
 

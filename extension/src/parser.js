@@ -5,18 +5,25 @@
 
   const RESOURCE_KEYS = ['wood', 'clay', 'iron', 'crop'];
 
+  // Direction marks, as characters or as HTML entities (the map's tooltip
+  // HTML writes numbers as "&#x202d;12&#x202c;"), and Arabic-Indic digits.
+  const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]|&#x(?:200[ef]|202[a-e]|206[6-9]);|&#(?:820[67]|823[4-8]|829[4-7]);/gi;
+  const plain = (s) => String(s == null ? '' : s).replace(BIDI, '')
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+
   // Travian wraps numbers in bidi marks (U+202D/U+202C), uses U+2212 for
   // minus and localised thousands separators. Keep digits and the sign.
   function num(text) {
     if (text == null) return null;
-    const s = String(text).replace(/−/g, '-').replace(/[^\d-]/g, '');
+    const s = plain(text).replace(/&#?\w+;/g, '').replace(/−/g, '-').replace(/[^\d-]/g, '');
     const m = s.match(/-?\d+/);
     return m ? parseInt(m[0], 10) : null;
   }
 
   const qs = (el, sel) => (el ? el.querySelector(sel) : null);
   const qsa = (el, sel) => (el ? Array.from(el.querySelectorAll(sel)) : []);
-  const text = (el) => (el ? el.textContent.replace(/[‪-‮]/g, '').replace(/\s+/g, ' ').trim() : '');
+  const text = (el) => (el ? plain(el.textContent).replace(/\s+/g, ' ').trim() : '');
 
   function classNumber(el, prefix) {
     for (const c of el.classList) {
@@ -282,8 +289,13 @@
       y: num(url.searchParams.get('y')),
       // Villages have no animal table; an empty oasis lists "none".
       isOasis: /oasis/i.test(cls) || animalUnits || !!troopTable,
-      // An owned oasis links to its owner's profile.
-      owned: !!qs(root, 'a[href*="/profile"], a[href*="spieler.php"]'),
+      // An owned oasis links to its owner's profile (in its info table;
+      // links in the tile's report list don't count).
+      owned: (() => {
+        const info = qs(doc, '#village_info');
+        const links = qsa(info || root, 'a[href*="/profile"], a[href*="spieler.php"]');
+        return links.some((a) => !a.closest('.reports, .rep, table.rep, #reports, .troop_details, #troop_info'));
+      })(),
       animals: animals ? animals.reduce((n, a) => n + a.count, 0) : null,
     };
   }
@@ -311,7 +323,7 @@
       for (const a of qsa(root, 'a[href*="karte.php"], a[href*="position_details.php"]')) {
         if (a.closest('.role')) continue;
         const u = new URL(a.getAttribute('href') || '', 'https://x.invalid/');
-        const d = num(u.searchParams.get('d'));
+        const d = num(u.searchParams.get('d') || u.searchParams.get('mapId'));
         if (u.searchParams.has('x')) targets.push({ x: num(u.searchParams.get('x')), y: num(u.searchParams.get('y')) });
         else if (d) targets.push({ x: ((d - 1) % 401) - 200, y: 200 - Math.floor((d - 1) / 401) }); // 401×401 map
       }
@@ -332,12 +344,14 @@
     const out = [];
     for (const tile of tiles || []) {
       const pos = tile.position || tile;
-      const title = String(tile.title || '');
-      const body = String(tile.text || '');
-      const oasis = /\{k\.(fo|bt)\}/.test(title) || (tile.did === -1 && /unit u(3[1-9]|40)\b/.test(body));
+      const title = plain(tile.title);
+      const body = plain(tile.text);
+      // "{k.fo}"/"{k.bt}" in the title; else did -1 with animals or an
+      // oasis bonus in the text (servers whose titles differ).
+      const oasis = /\{k\.(fo|bt)\}/.test(title) || (tile.did === -1 && !/\{k\.vt\}/.test(title) && /unit u(3\d|40)\b|\{a\.r\d\}|\{k\.animals\}/.test(body));
       if (!oasis || pos.x == null || pos.y == null) continue;
       let animals = 0;
-      for (const m of body.matchAll(/unit u(\d+)\b[\s\S]*?class="value[^"]*"[^>]*>\s*([\d,.]+)/g)) animals += num(m[2]) || 0;
+      for (const m of body.matchAll(/unit u(\d+)\b[\s\S]*?class="value[^"]*"[^>]*>\s*([\d,.\s]+)</g)) animals += num(m[2]) || 0;
       out.push({
         x: Number(pos.x), y: Number(pos.y),
         owned: /\{k\.bt\}/.test(title) || !!(tile.uid && tile.uid > 0),
@@ -413,6 +427,23 @@
     return { loaded: !!box && !qs(doc, '.inventoryPageWrapper.loading'), items };
   }
 
+  // A list of map tiles anywhere in an answer from the map service:
+  // objects with a position (the format has changed over the years).
+  const isTile = (t) => t && typeof t === 'object' && ((t.position && t.position.x != null && t.position.y != null) ||
+    (t.x != null && t.y != null && ('did' in t || 'uid' in t || 'title' in t || 'text' in t)));
+  function findTiles(json, depth = 0) {
+    if (!json || typeof json !== 'object' || depth > 6) return null;
+    if (Array.isArray(json)) {
+      if (json.length && json.every(isTile)) return json;
+      for (const it of json) { const f = findTiles(it, depth + 1); if (f) return f; }
+      return null;
+    }
+    if (Array.isArray(json.tiles) && json.tiles.length) return json.tiles;
+    for (const k of Object.keys(json)) { const f = findTiles(json[k], depth + 1); if (f) return f; }
+    return null;
+  }
+  const shapeOf = (v) => (v && typeof v === 'object' ? (Array.isArray(v) ? `array(${v.length})` : `{${Object.keys(v).slice(0, 12).join(',')}}`) : typeof v);
+
   // Free valleys (somewhere to found a village) from the same map answer:
   // "{k.vt}" in the title, nobody's tile, and "{k.fN}" its field layout.
   function valleysFromTiles(tiles) {
@@ -431,11 +462,13 @@
   // "{k.spieler} name", "{k.einwohner} population", "{k.allianz} tag".
   function villagesFromTiles(tiles) {
     const out = [];
-    const strip = (s) => String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const decode = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'")
+      .replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCodePoint(parseInt(n, 16)));
+    const strip = (s) => decode(plain(s).replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
     for (const tile of tiles || []) {
       const pos = tile.position || tile;
       if (pos.x == null || pos.y == null || !(tile.uid > 0) || !(tile.did > 0)) continue;
-      const body = String(tile.text || '');
+      const body = plain(tile.text);
       const field = (key) => {
         const m = body.match(new RegExp('\\{k\\.' + key + '\\}([^<{]*)'));
         return m ? strip(m[1]) : null;
@@ -456,8 +489,8 @@
   // build.php for an existing building / field / empty site.
   function parseBuildPage(doc, url) {
     const slot = num(url.searchParams.get('id'));
-    const upgrade = qs(doc, '.upgradeButtonsContainer .section1 button.build') ||
-      qs(doc, '.upgradeButtonsContainer button.green.build');
+    const upgrade = qs(doc, '.upgradeButtonsContainer .section1 button.build:not(.videoFeatureButton)') ||
+      qs(doc, '.upgradeButtonsContainer button.green.build:not(.videoFeatureButton)');
     const contract = doc.getElementById('contract') || qs(doc, '[id^="contract_building"]');
     const error = qs(contract || doc, '.errorMessage');
     const waitTimer = qs(error, '.timer');
@@ -520,7 +553,7 @@
     return qsa(root, '.farmListHeader').map((h) => ({
       id: (qs(h, '[data-list]') || h).getAttribute('data-list'),
       name: text(qs(h, '.name')),
-      canStart: !!qs(h, 'button.startFarmList:not([disabled])'),
+      canStart: !!qs(h, 'button.startFarmList:not([disabled]):not(.disabled)'),
     }));
   }
 
@@ -529,7 +562,8 @@
   function parseExpansion(doc) {
     const box = qs(doc, '.expansionSlotInfo');
     if (!box) return null;
-    const m = text(qs(box, '.slots')).replace(/[^\d/]/g, '').match(/(\d+)\/(\d+)/);
+    // "1/3" (left to right) or "1\\3" (Arabic, right to left): used, then total.
+    const m = text(qs(box, '.slots')).match(/(\d+)\s*[/\\]\s*(\d+)/);
     const bar = qs(box, '.bar');
     const w = bar && (bar.getAttribute('style') || '').match(/width:\s*([\d.]+)%/);
     return { used: m ? Number(m[1]) : null, total: m ? Number(m[2]) : null, pct: w ? Number(w[1]) : null };
@@ -576,7 +610,7 @@
   const api = {
     num, parsePage, parseResources, parseVillages, parseBuildQueue, parseFields, parseBuildings, parseMovements,
     parseBuildPage, parseFarmLists, parseHero, pageType, parseTroops, parseTrainingQueue, parseTile, parseSendPage,
-    oasesFromTiles, villagesFromTiles, valleysFromTiles, unitOf, parseNewBuildings, parseQuests, parseInventory, parseReports, parseExpansion,
+    oasesFromTiles, villagesFromTiles, valleysFromTiles, findTiles, shapeOf, unitOf, parseNewBuildings, parseQuests, parseInventory, parseReports, parseExpansion,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TravianParser = api;

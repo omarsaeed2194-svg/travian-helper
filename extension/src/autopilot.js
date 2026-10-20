@@ -6,6 +6,7 @@ import { savingFor, bestCpUpgrade } from './culture.js';
 import { expansionBuild } from './expansion.js';
 
 const MAP_SIZE = 401; // standard Travian map, -200..200
+export const MAP_EDGE = (MAP_SIZE - 1) / 2; // coordinates go from -200 to 200
 
 // u21 (Phalanx) → t1: every tribe has a block of ten unit numbers.
 export function unitField(unit) {
@@ -40,7 +41,7 @@ const RESOURCE_BUILDINGS = new Set([5, 6, 7, 8, 9]);
 export const buildCategory = (gid) => (RESOURCE_BUILDINGS.has(gid) ? 3 : MILITARY.has(gid) ? 2 : 1);
 
 // Each tribe's wall (slot 40).
-const WALLS = { 0: 31, 10: 32, 20: 33, 50: 42, 60: 43 };
+const WALLS = { 0: 31, 10: 32, 20: 33, 50: 42, 60: 43, 70: 47 };
 export const wallGid = (tribeBase) => WALLS[tribeBase] || null;
 
 // What every village needs, in order, with the levels the game asks for
@@ -114,13 +115,13 @@ export function pickAutoUpgrade(v, s, now = Date.now(), tribeBase = null, plan =
   }
 
   // 2b. New-village plan: this village's Residence (or Palace) to 10.
-  const exp = expansionBuild(v, plan, tribeBase);
-  if (exp && !skip.includes(exp.slot)) return exp;
+  const skipGids = v.autoSkip && v.autoSkip.until > now ? v.autoSkip.gids || [] : [];
+  const exp = expansionBuild(v, plan, tribeBase, { slots: skip, gids: skipGids });
+  if (exp) return exp;
 
   // 3. Culture points focus, part 1: a celebration is due — save for it
   // (or first make the storage big enough to hold its cost).
   const cu = s.culture || {};
-  const skipGids = v.autoSkip && v.autoSkip.until > now ? v.autoSkip.gids || [] : [];
   if (cu.focus) {
     const failedLately = (v.celebrationFailAt || 0) > now - 12 * 3600000;
     const save = failedLately ? null : savingFor(v, cu.celebrate, now);
@@ -184,7 +185,8 @@ export function raidTargets(v, rule, oases, now = Date.now()) {
     if (seen.has(key)) return;
     seen.add(key);
     const d = distance(v, o);
-    if (d > rule.radius && !o.manual) return;
+    // Unknown distance (village coordinates not read yet) is never "inside".
+    if (!(d <= rule.radius) && !o.manual) return;
     if (o.owned || o.notOasis) return;
     if (o.raidedAt && now - o.raidedAt < cooldown) return;
     // Animals seen recently: leave it for a while (they don't leave by themselves).
@@ -230,7 +232,7 @@ export function parseCoordList(text) {
     const m = /^\(?\s*(-?\d{1,3})\s*[|,;/\s]\s*(-?\d{1,3})\s*\)?\s*(.*)$/.exec(line);
     if (!m) { out.push({ error: raw.trim() }); continue; }
     const x = Number(m[1]), y = Number(m[2]);
-    if (Math.abs(x) > 400 || Math.abs(y) > 400) { out.push({ error: raw.trim() }); continue; }
+    if (Math.abs(x) > MAP_EDGE || Math.abs(y) > MAP_EDGE) { out.push({ error: raw.trim() }); continue; }
     out.push({ x, y, name: m[3].replace(/^[-–:·\s]+/, '').slice(0, 40) });
   }
   return out;

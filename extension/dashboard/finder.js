@@ -1,6 +1,6 @@
 // Farm lists page: inactive finder — players whose villages stopped growing,
 // found by looking at the map twice, a day apart.
-import { command, esc, fillSelect } from '../src/ui.js';
+import { command, esc, fillSelect, editingIn } from '../src/ui.js';
 import { sortedVillages, fmtAgo, fmtDuration, fmtNum } from '../src/shared.js';
 import { t, coords, dateLocale } from '../src/i18n.js';
 import { inactiveCandidates, trackingInfo } from '../src/inactive.js';
@@ -12,11 +12,14 @@ let lastRows = '';
 
 const when = (ts) => new Date(ts).toLocaleString(dateLocale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
+let chosen = null;
+
 export function renderFinder(d, now) {
   data = d;
   const villages = sortedVillages(data.villages);
   const sc = data.schedule || {};
-  fillSelect($('finderVillage'), villages.map((v) => [v.id, `${v.name} ${coords(v.x, v.y)}`]), sc.finderVillage || undefined);
+  // The player's own choice wins over the village being tracked.
+  fillSelect($('finderVillage'), villages.map((v) => [v.id, `${v.name} ${coords(v.x, v.y)}`]), chosen || sc.finderVillage || undefined);
   const from = data.villages[$('finderVillage').value];
   const info = trackingInfo(data.mapVillages, now);
   const auto = data.settings.botEnabled || data.settings.autopilot.enabled;
@@ -51,16 +54,17 @@ export function renderFinder(d, now) {
         : `<button class="btn small" data-finder-add="${c.x}|${c.y}" ${farm ? '' : 'disabled'}>${esc(t('finder.add'))}</button>`}</td>
     </tr>`).join('');
   const html = rows ? `<tr>${head}</tr>${rows}` : `<tr><td class="muted">${esc(t(info.ready ? 'finder.noneFound' : 'finder.waiting'))}</td></tr>`;
-  if (html !== lastRows && !$('finderTable').contains(document.activeElement)) { lastRows = html; $('finderTable').innerHTML = html; }
+  if (html !== lastRows && !editingIn($('finderTable'))) { lastRows = html; $('finderTable').innerHTML = html; }
 }
 
+$('finderVillage').addEventListener('change', (e) => { chosen = e.target.value; rerender(); });
 const say = (text, tone = 'muted') => { $('finderMsg').textContent = text; $('finderMsg').className = `small ${tone === 'bad' ? 'bad' : tone === 'good' ? 'good-text' : 'muted'}`; };
 const rerender = () => window.dispatchEvent(new CustomEvent('tvh:rerender-all'));
 
 $('finderScan').addEventListener('click', async () => {
   const id = $('finderVillage').value;
   if (!id) return;
-  try { await command('finderScan', { villageId: id }); say(t('finder.scanning'), 'good'); } catch (err) { say(err.message, 'bad'); }
+  try { await command('finderScan', { villageId: id, radius: Number($('finderRadius').value) || 25 }); say(t('finder.scanning'), 'good'); } catch (err) { say(err.message, 'bad'); }
 });
 $('finderStop').addEventListener('click', () => command('finderStop'));
 $('finderRadius').addEventListener('input', rerender);

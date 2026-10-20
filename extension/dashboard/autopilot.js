@@ -2,7 +2,7 @@
 // page (raid rules and the oases known around each village).
 import { command, esc, fillSelect } from '../src/ui.js';
 import { sortedVillages, buildingName, taskLabel, fmtDuration, fmtAgo, buildStatus } from '../src/shared.js';
-import { pickAutoUpgrade, unitField, distance, oasisKey } from '../src/autopilot.js';
+import { pickAutoUpgrade, unitField, distance, oasisKey, parseCoordList } from '../src/autopilot.js';
 import { expansionPlan } from '../src/expansion.js';
 import { tribeBase } from '../src/units.js';
 import { t, coords } from '../src/i18n.js';
@@ -34,7 +34,7 @@ function unitNameFor(v, field) {
     const u = list.find((x) => x.field === field);
     if (u && u.name) return u.name;
   }
-  return t('troops.unitN', { n: field.slice(1) });
+  return t('troops.unitN', { n: String(field || '').slice(1) });
 }
 
 // ------------------------------------------------------------------ plan ---
@@ -110,6 +110,12 @@ function oasisStatus(o) {
 function renderOases(now) {
   const v = data.villages[$('raidVillage').value];
   $('oasisTitle').textContent = v ? t('raid.oasesNear', { v: v.name }) : t('raid.oases');
+  // How the last map read went (details in Health → diagnostics report).
+  const md = data.account.mapDiag;
+  $('mapDiagLine').textContent = !md ? '' : md.ok
+    ? t('map.lastOk', { ago: fmtAgo(md.at, now), n: md.tiles, o: md.oases, how: t(`map.how.${md.method || 'fetch'}`) })
+    : t('map.lastFail', { ago: fmtAgo(md.at, now) });
+  $('mapDiagLine').className = `small ${md && !md.ok ? 'bad' : 'muted'}`;
   if (!v) { $('oasisTable').innerHTML = ''; $('oasisMeta').textContent = ''; return; }
   const rules = data.raids.filter((r) => r.villageId === v.id);
   const radius = Math.max(7, ...rules.map((r) => r.radius || 0));
@@ -188,8 +194,10 @@ $('scanOases').addEventListener('click', async (e) => {
 });
 
 $('addTarget').addEventListener('click', async () => {
-  const m = $('targetXY').value.replace(/[−–]/g, '-').match(/^\s*\(?\s*(-?\d+)\s*[|,;\s]\s*(-?\d+)\s*\)?\s*$/);
-  if (!m) { $('targetMsg').textContent = t('raid.badCoords'); return; }
+  // As copied from the game (with its direction marks) or typed.
+  const [p] = parseCoordList($('targetXY').value);
+  if (!p || p.error) { $('targetMsg').textContent = t('raid.badCoords'); return; }
+  const m = [null, p.x, p.y];
   const rule = ruleForVillage();
   if (!rule) { $('targetMsg').textContent = t('raid.needRule'); return; }
   try {

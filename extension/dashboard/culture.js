@@ -1,6 +1,6 @@
 // Culture tab: progress towards the next village, culture points per
 // village, celebrations, and what the autopilot would build for culture.
-import { esc, command } from '../src/ui.js';
+import { esc, command, editingIn } from '../src/ui.js';
 import { sortedVillages, buildingName, fmtNum, fmtDuration, fmtClock, estimateStock, RESOURCES } from '../src/shared.js';
 import { t, dateLocale, coords } from '../src/i18n.js';
 import { villageCp, bestCpUpgrade, savingFor, expansionEta, CELEBRATIONS } from '../src/culture.js';
@@ -60,7 +60,7 @@ function renderExpansion(now) {
       <td class="actions">${actions}</td></tr>`;
   }).join('');
   const html = plan.rows.length ? `<tr>${head}<th></th></tr>${rows}` : `<tr><td class="muted">${esc(t('build.noVillages'))}</td></tr>`;
-  if (html !== lastExp && !$('expTable').contains(document.activeElement)) { lastExp = html; $('expTable').innerHTML = html; }
+  if (html !== lastExp && !editingIn($('expTable'))) { lastExp = html; $('expTable').innerHTML = html; }
   $('expTable').closest('.table-wrap').hidden = !plan.enabled;
   if (document.activeElement !== $('expTargets') && $('expTargets').dataset.sig !== JSON.stringify(s.expansion.targets)) {
     $('expTargets').dataset.sig = JSON.stringify(s.expansion.targets);

@@ -15,7 +15,7 @@ const GRANARY = 11;
 const CRANNY = 23;
 const MARKETPLACE = 17;
 const RALLY_POINT = 16;
-const WALLS = [31, 32, 33, 42, 43];
+const WALLS = [31, 32, 33, 42, 43, 47];
 const WALL_SLOT = 40; // every tribe's wall sits here, whatever it's called
 const STALE_MS = 60 * 60 * 1000;
 
@@ -79,7 +79,7 @@ export function adviseVillage(v, data, now = Date.now()) {
   if (prod && prod.crop < 0) {
     const hrs = hoursUntilLimit(v, 'crop', now);
     add('critical', 'crop', t('tip.starving', { p: ltr(prod.crop), t: fmtDuration((hrs || 0) * 3600000) }),
-      { type: 'addFields', label: t('tip.actFields', { res: resLabel('crop') }), villageId: v.id, resource: 'crop', targetLevel: fieldStats(v).crop.min + 1 });
+      v.fields ? { type: 'addFields', label: t('tip.actFields', { res: resLabel('crop') }), villageId: v.id, resource: 'crop', targetLevel: fieldStats(v).crop.min + 1 } : null);
   } else if (prod && prod.cropGross && prod.crop < Math.max(10, prod.cropGross * 0.1)) {
     add('warning', 'crop', t('tip.cropLow', { p: ltr(`+${prod.crop}`) }),
       v.fields ? { type: 'addFields', label: t('tip.actFields', { res: resLabel('crop') }), villageId: v.id, resource: 'crop', targetLevel: fieldStats(v).crop.min + 1 } : null);

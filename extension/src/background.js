@@ -5,7 +5,7 @@ import {
   estimateStock, fmtDuration, fmtClock, withinActiveHours, sortedVillages, taskLabel, buildingName,
   buildBlock, fmtNum,
 } from './shared.js';
-import { pickAutoUpgrade, troopsHome, raidTargets, oasisKey, farmTargets, coversTroops, cleanTroops, buildCategory, bagShortfall, distance } from './autopilot.js';
+import { pickAutoUpgrade, troopsHome, raidTargets, oasisKey, farmTargets, coversTroops, cleanTroops, buildCategory, bagShortfall, distance, MAP_EDGE } from './autopilot.js';
 import { tribeBase } from './units.js';
 import { recordMapVillages } from './inactive.js';
 import { applyReports } from './reports.js';
@@ -53,6 +53,8 @@ function update(keys, fn) {
   return run;
 }
 const read = (keys) => chrome.storage.local.get(keys);
+// Set several keys through the same queue.
+const storeAll = (obj) => update(Object.keys(obj), (d) => { Object.assign(d, obj); });
 async function getSettings() {
   const s = mergeSettings((await read(['settings'])).settings);
   setLanguage(s.language);
@@ -113,18 +115,20 @@ async function sendAlert({ title, body, kind, sticky, villageId }) {
   await sendRemote(s, `${title}\n${body}`);
 }
 
+const REMOTE_TIMEOUT_MS = 15000; // a slow or blocked Telegram/Discord must not hold up the bot
+
 async function sendRemote(s, text) {
   const jobs = [];
   if (s.telegram.token && s.telegram.chatId) {
     jobs.push(fetch(`https://api.telegram.org/bot${encodeURIComponent(s.telegram.token)}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: s.telegram.chatId, text }),
+      body: JSON.stringify({ chat_id: s.telegram.chatId, text }), signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
     }).then((r) => { if (!r.ok) throw new Error(`Telegram HTTP ${r.status}`); }));
   }
   if (/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(s.discord.webhookUrl || '')) {
     jobs.push(fetch(s.discord.webhookUrl, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify({ content: text }), signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
     }).then((r) => { if (!r.ok) throw new Error(`Discord HTTP ${r.status}`); }));
   }
   const results = await Promise.allSettled(jobs);
@@ -155,6 +159,7 @@ async function processPage(state, tabId) {
   const alerts = [];
   const notes = [];
   const events = []; // [level, message, villageId] for the activity log
+  const newlyAttacked = [];
 
   await update(['settings', 'villages', 'account', 'status', 'alertMemo', 'history', 'oases'], (d) => {
     const s = mergeSettings(d.settings);
@@ -190,6 +195,7 @@ async function processPage(state, tabId) {
       Object.assign(v, { name: vi.name, x: vi.x, y: vi.y, order, underAttack: vi.underAttack });
       if (vi.underAttack && !wasAttacked) {
         v.needsRefresh = true; // fetch arrival times on the next tick
+        newlyAttacked.push(vi.id);
         attackAlerts[vi.id] = { villageId: vi.id, kind: 'attacks', sticky: true, title: t('alert.attack.title', { v: vi.name }), body: t('alert.attack.body', { xy: coords(vi.x, vi.y) }) };
       }
       if (!vi.underAttack && wasAttacked) {
@@ -349,6 +355,19 @@ async function processPage(state, tabId) {
     if (state.farmLists) d.account.farmLists = state.farmLists;
     d.account.updatedAt = now;
   });
+  // The job that opened this page goes on now; logs and alerts (Telegram
+  // can be slow) follow on their own.
+  if (tabId != null) resolvePage(tabId, state);
+
+  // A new attack on a village with an escape or donation plan: read its
+  // arrival time now, even in the middle of a long run.
+  if (newlyAttacked.length) {
+    const { escapes = [] } = await read(['escapes']);
+    if (escapes.some((p) => p.enabled !== false && newlyAttacked.includes(p.villageId))) {
+      urgent = true;
+      tick(false, true);
+    }
+  }
 
   for (const n of notes) await log('info', n);
   for (const [level, msg, vid] of events) await log(level, msg, vid);
@@ -453,6 +472,11 @@ async function runEscapeStage(tabId, s) {
   if (ids.length) await runJobs(tabId, [{ type: 'refresh', villageIds: ids, quick: true, label: t('job.refreshAttacked') }], s, true);
   data = await read(DATA_KEYS);
   const jobs = planEscapes(data, Date.now());
+  // An "escape now" that no plan can use any more must not wait for a
+  // later attack (it would send the troops off at once, lead time or not).
+  const asked = (data.schedule || {}).escapeNow || [];
+  const used = new Set(jobs.filter((j) => j.force).map((j) => (data.escapes || []).find((p) => p.id === j.planId)).filter(Boolean).map((p) => p.villageId));
+  if (asked.some((id) => !used.has(id))) await update(['schedule'], (d) => { if (d.schedule) d.schedule.escapeNow = (d.schedule.escapeNow || []).filter((id) => used.has(id)); });
   if (jobs.length) await runJobs(tabId, jobs, s, true);
 }
 
@@ -471,7 +495,7 @@ function waitForPage(tabId, timeout = PAGE_TIMEOUT_MS) {
   let entry;
   const promise = new Promise((resolve, reject) => {
     entry = {
-      resolve, reject,
+      resolve, reject, since: Date.now(),
       timer: setTimeout(() => { waiters.delete(tabId); reject(new Error(t('err.timeout'))); }, timeout),
     };
   });
@@ -483,9 +507,15 @@ function waitForPage(tabId, timeout = PAGE_TIMEOUT_MS) {
   return promise;
 }
 
+const handedOver = new WeakSet(); // page reports already given to a waiting job
+
 function resolvePage(tabId, state) {
   const w = waiters.get(tabId);
-  if (!w) return;
+  if (!w || !state || handedOver.has(state)) return;
+  // A late report from the page before (it loaded before this wait began)
+  // is not the page the job is waiting for.
+  if (state.loadedAt && state.loadedAt < w.since - 300) return;
+  handedOver.add(state);
   waiters.delete(tabId);
   clearTimeout(w.timer);
   w.resolve(state);
@@ -496,39 +526,72 @@ async function navigate(tabId, url, timeout = PAGE_TIMEOUT_MS) {
   await chrome.tabs.update(tabId, { url });
   const state = await page;
   if (state.type === 'login') throw Object.assign(new Error(t('err.loggedOut')), { loggedOut: true });
+  if (state.type === 'unknown') throw new Error(t('err.unknownPage', { title: state.title || state.url || '?' }));
   return state;
 }
 
 // Ask the content script to click something. If the click navigates, wait
 // for the next page and return it alongside the content script's answer.
+// The last failed actions and what their page looked like (diagnostics).
+async function noteFailedAction(action, res) {
+  await update(['diag'], (d) => {
+    const diag = d.diag = d.diag || {};
+    diag.actions = [{ at: Date.now(), kind: action.kind, code: res.code || null, reason: res.reason || null, status: res.status || null, probe: res.probe || null }, ...(diag.actions || [])].slice(0, 20);
+  });
+}
+
+const ACTION_TIMEOUT_MS = 3 * 60000; // a frozen tab must not hold the bot forever
+
 async function act(tabId, action, expectNavigation) {
   const page = expectNavigation ? waitForPage(tabId) : null;
   let res;
   try {
-    res = await chrome.tabs.sendMessage(tabId, { type: 'ACTION', action });
+    let timer;
+    res = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { type: 'ACTION', action }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve({ ok: false, code: 'noResponse' }), ACTION_TIMEOUT_MS); }),
+    ]).finally(() => clearTimeout(timer));
   } catch (e) {
     if (/Receiving end does not exist/i.test(e.message)) {
       res = { ok: false, code: 'notLoaded' };
-    } else {
+    } else if (expectNavigation) {
       // The page navigated away before answering; treat the click as done.
       res = { ok: true, navigating: true, lost: true };
+    } else {
+      // The page went away in the middle (the game reloaded it…): whether
+      // the action happened is unknown.
+      res = { ok: false, code: 'lost', lost: true, reason: String(e.message || e).slice(0, 160) };
     }
   }
   if (!res || !res.ok) {
     if (page) page.cancel();
+    await noteFailedAction(action, res || { ok: false, code: 'noResponse' });
     return { res: res || { ok: false, code: 'noResponse' } };
   }
-  return { res, page: page ? await page : null };
+  if (!page) return { res, page: null };
+  try {
+    return { res, page: await page };
+  } catch (e) {
+    // Clicked, but no new page came: the game didn't take it (or is slow).
+    const miss = { ok: false, code: 'noNavigation' };
+    await noteFailedAction(action, miss);
+    return { res: miss, page: null };
+  }
 }
 
 async function ensureWorkerTab(server) {
   const { workerTabId } = await chrome.storage.session.get('workerTabId');
   if (workerTabId != null) {
-    try {
-      const existing = await chrome.tabs.get(workerTabId);
+    let existing = null;
+    try { existing = await chrome.tabs.get(workerTabId); } catch (e) { /* closed */ }
+    if (existing) {
       const url = existing.url || existing.pendingUrl || '';
       if (url.startsWith(server)) return workerTabId;
-    } catch (e) { /* closed */ }
+      // It ended up somewhere else (lobby, an error page): bring it back
+      // rather than open one more tab.
+      await navigate(workerTabId, `${server}/dorf1.php`);
+      return workerTabId;
+    }
   }
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false, pinned: true });
   await chrome.storage.session.set({ workerTabId: tab.id });
@@ -583,6 +646,11 @@ async function sendTroops(tabId, s, vid, { x, y, troops, mission = 'raid' }) {
   const sp = form.sendPage;
   if (!sp || sp.stage !== 'form') return { ok: false, fatal: true, reason: t('reason.noSendForm') };
   const available = sp.available;
+  // "Everything at home", but the form's counts can't be read: say so
+  // rather than report that there was nothing to send.
+  if (typeof troops === 'function' && !Object.values(available || {}).some((n) => n != null)) {
+    return { ok: false, available, reason: t('reason.noTroopCounts') };
+  }
   if (typeof troops === 'function') troops = troops(available);
   if (!Object.keys(troops).length) return { ok: false, empty: true, available, reason: t('reason.notEnoughTroops') };
   if (Object.entries(troops).some(([f, n]) => available[f] != null && available[f] < n)) {
@@ -598,6 +666,10 @@ async function sendTroops(tabId, s, vid, { x, y, troops, mission = 'raid' }) {
   if (!res2.ok) return { ok: false, available, reason: reasonText(res2) };
   if (after && after.sendPage && after.sendPage.stage === 'confirm') {
     return { ok: false, available, reason: after.sendPage.error || t('reason.stillOnConfirm') };
+  }
+  // Back on the form: the game turned it down (troops gone, protection…).
+  if (after && after.sendPage && after.sendPage.stage === 'form') {
+    return { ok: false, available, reason: after.sendPage.error || t('reason.backOnForm') };
   }
   return { ok: true, available, sent: troops };
 }
@@ -616,6 +688,70 @@ async function checkOasis(tabId, s, x, y, trusted) {
   return { ok: true };
 }
 
+// One training order for a rule; returns when to look again.
+async function trainOnce(tabId, rule, s, next) {
+  const { villages = {} } = await read(['villages']);
+  const vname = villages[rule.villageId] ? villages[rule.villageId].name : rule.villageId;
+  const bname = buildingName(rule.gid);
+  const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(rule.villageId)}&gid=${rule.gid}`);
+  const unit = page.buildPage && page.buildPage.trainable.find((u) => u.field === rule.troop);
+  if (!unit) {
+    await log('error', t('log.trainNotThere', { b: bname, v: vname, u: rule.troop }), rule.villageId);
+    return next;
+  }
+  const amount = Math.min(rule.amount, unit.max);
+  if (amount < 1) {
+    next = Math.min(next, 15 * 60000);
+    await log('info', t('log.trainNoRes', { b: bname, v: vname, u: unit.name || rule.troop, t: fmtDuration(next) }), rule.villageId);
+    return next;
+  }
+  const { res } = await act(tabId, { kind: 'train', field: rule.troop, amount }, true);
+  if (res.ok) { await log('success', t('log.training', { n: amount, u: unit.name || rule.troop, v: vname }), rule.villageId); await bump('trained', amount); }
+  else await log('error', t('log.trainFailed', { v: vname, reason: reasonText(res) }), rule.villageId);
+  return next;
+}
+
+// Every village's pages (or just `job.villageIds`): main page, buildings
+// now and then, and what's in training.
+async function refreshVillages(tabId, job, s) {
+  let { villages = {} } = await read(['villages']);
+  let ids = job.villageIds || sortedVillages(villages).map((v) => v.id);
+  if (!ids.length) {
+    const first = await navigate(tabId, `${s.server}/dorf1.php`);
+    ids = (first.villages || []).map((v) => v.id).filter((id) => id !== first.villageId);
+  }
+  for (const id of ids) {
+    if (urgent && !job.quick) break; // an escape is due: let it run first
+    await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(id)}`);
+    if (job.quick) continue;
+    ({ villages = {} } = await read(['villages']));
+    const v = villages[id];
+    if (v && (!v.buildingsAt || Date.now() - v.buildingsAt > BUILDINGS_RESCAN_MS)) {
+      await sleep(rand(1200, 3000));
+      await navigate(tabId, `${s.server}/dorf2.php?newdid=${encodeURIComponent(id)}`);
+    }
+    // What's in training: look once, and again after a queue runs out.
+    ({ villages = {} } = await read(['villages']));
+    const fresh = villages[id];
+    for (const gid of TROOP_BUILDINGS) {
+      if (!fresh || !(fresh.buildings || []).some((b) => b.gid === gid && b.level > 0)) continue;
+      const q = (fresh.trainingQueue || {})[gid];
+      const done = q && q.items.length && q.items.every((i) => i.finishAt && i.finishAt < Date.now());
+      if (q && !done) continue;
+      await sleep(rand(1200, 3000));
+      const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(id)}&gid=${gid}`);
+      if (!(page.buildPage && page.buildPage.trainingQueue)) {
+        // Couldn't read a queue here; don't look again every refresh.
+        await update(['villages'], (d) => {
+          const vv = d.villages && d.villages[id];
+          if (vv) vv.trainingQueue = { ...(vv.trainingQueue || {}), [gid]: { at: Date.now(), items: [], unknown: true } };
+        });
+      }
+    }
+    await sleep(rand(1500, 4000));
+  }
+}
+
 const JOBS = {
   // Move the village's troops out before the attack lands.
   async escape(tabId, job, s) {
@@ -632,7 +768,11 @@ const JOBS = {
     if (!tm) return; // attack recalled, or already handled
     const setState = (patch) => update(['villages'], (d) => {
       const x = d.villages && d.villages[vid];
-      if (x) x.escape = { ...(x.escape && sameAttack(x.escape.forAttack, tm.first) ? x.escape : {}), forAttack: tm.first, at: Date.now(), ...patch };
+      if (!x) return;
+      const prev = x.escape || {};
+      // "Resources spent for this attack" survives the first record of it.
+      const spent = sameAttack(prev.spentFor, tm.first) ? { spentFor: prev.spentFor } : {};
+      x.escape = { ...(sameAttack(prev.forAttack, tm.first) ? prev : {}), ...spent, forAttack: tm.first, at: Date.now(), ...patch };
     });
     const lands = fmtClock(tm.first);
     const dest = escapeTarget(v, plan, villages);
@@ -721,7 +861,8 @@ const JOBS = {
       const link = !res.ok && res.link ? new URL(res.link, s.server).href : null;
       next = link && !tried.has(link) ? link : !res.ok && res.code === 'noDonateForm' && !tried.has(`${s.server}/alliance`) ? `${s.server}/alliance` : null;
     }
-    if (!res.ok) { await fail(reasonText(res)); return; }
+    // A page that went away mid-way may still have taken it: check below.
+    if (!res.ok && !res.lost) { await fail(reasonText(res)); return; }
     // What actually went in (the daily limit or a box's maximum can cut it).
     const given = res.sent || amounts;
     const sum = Object.values(given).reduce((n, x) => n + x, 0);
@@ -755,43 +896,11 @@ const JOBS = {
   },
 
   async refresh(tabId, job, s) {
-    let { villages = {} } = await read(['villages']);
-    let ids = job.villageIds || sortedVillages(villages).map((v) => v.id);
-    if (!ids.length) {
-      const first = await navigate(tabId, `${s.server}/dorf1.php`);
-      ids = (first.villages || []).map((v) => v.id).filter((id) => id !== first.villageId);
+    try {
+      await refreshVillages(tabId, job, s);
+    } finally {
+      if (!job.villageIds && !urgent) await patchSchedule({ refreshAt: Date.now() + jittered(s.refreshMinutes * 60000, s.jitterPercent) });
     }
-    for (const id of ids) {
-      if (urgent && !job.quick) break; // an escape is due: let it run first
-      await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(id)}`);
-      if (job.quick) continue;
-      ({ villages = {} } = await read(['villages']));
-      const v = villages[id];
-      if (v && (!v.buildingsAt || Date.now() - v.buildingsAt > BUILDINGS_RESCAN_MS)) {
-        await sleep(rand(1200, 3000));
-        await navigate(tabId, `${s.server}/dorf2.php?newdid=${encodeURIComponent(id)}`);
-      }
-      // What's in training: look once, and again after a queue runs out.
-      ({ villages = {} } = await read(['villages']));
-      const fresh = villages[id];
-      for (const gid of TROOP_BUILDINGS) {
-        if (!fresh || !(fresh.buildings || []).some((b) => b.gid === gid && b.level > 0)) continue;
-        const q = (fresh.trainingQueue || {})[gid];
-        const done = q && q.items.length && q.items.every((i) => i.finishAt && i.finishAt < Date.now());
-        if (q && !done) continue;
-        await sleep(rand(1200, 3000));
-        const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(id)}&gid=${gid}`);
-        if (!(page.buildPage && page.buildPage.trainingQueue)) {
-          // Couldn't read a queue here; don't look again every refresh.
-          await update(['villages'], (d) => {
-            const vv = d.villages && d.villages[id];
-            if (vv) vv.trainingQueue = { ...(vv.trainingQueue || {}), [gid]: { at: Date.now(), items: [], unknown: true } };
-          });
-        }
-      }
-      await sleep(rand(1500, 4000));
-    }
-    if (!job.villageIds && !urgent) await patchSchedule({ refreshAt: Date.now() + jittered(s.refreshMinutes * 60000, s.jitterPercent) });
   },
 
   async build(tabId, job, s) {
@@ -845,6 +954,14 @@ const JOBS = {
         v = villages[vid];
       }
       const field = pickField(v, task);
+      // The last fields below the target are being built: wait for them
+      // rather than call the task done.
+      const building = !field && (v.fields || []).some((f) => f.underConstruction && f.level + 1 < task.targetLevel &&
+        (!task.resource || task.resource === 'all' || FIELD_RESOURCE[f.gid] === task.resource));
+      if (building) {
+        await patchVillage(vid, { buildWait: { reason: 'blocked', at: Date.now(), until: Date.now() + 10 * 60000, text: t('reason.fieldsBuilding') } });
+        return;
+      }
       if (!field) {
         await removeTask(vid, task.id);
         await log('success', t('log.done', { task: taskLabel(task, v) }), vid);
@@ -963,29 +1080,16 @@ const JOBS = {
 
   async train(tabId, job, s) {
     const rule = job.rule;
-    const { villages = {} } = await read(['villages']);
-    const vname = villages[rule.villageId] ? villages[rule.villageId].name : rule.villageId;
-    const bname = buildingName(rule.gid);
-    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(rule.villageId)}&gid=${rule.gid}`);
-    const unit = page.buildPage && page.buildPage.trainable.find((u) => u.field === rule.troop);
     let next = jittered(rule.everyMinutes * 60000, s.jitterPercent);
-    if (!unit) {
-      await log('error', t('log.trainNotThere', { b: bname, v: vname, u: rule.troop }), rule.villageId);
-    } else {
-      const amount = Math.min(rule.amount, unit.max);
-      if (amount < 1) {
-        next = Math.min(next, 15 * 60000);
-        await log('info', t('log.trainNoRes', { b: bname, v: vname, u: unit.name || rule.troop, t: fmtDuration(next) }), rule.villageId);
-      } else {
-        const { res } = await act(tabId, { kind: 'train', field: rule.troop, amount }, true);
-        if (res.ok) { await log('success', t('log.training', { n: amount, u: unit.name || rule.troop, v: vname }), rule.villageId); await bump('trained', amount); }
-        else await log('error', t('log.trainFailed', { v: vname, reason: reasonText(res) }), rule.villageId);
-      }
+    try {
+      next = await trainOnce(tabId, rule, s, next);
+    } finally {
+      // Also after an error: the order may have gone through.
+      await update(['training'], (d) => {
+        const r = (d.training || []).find((x) => x.id === rule.id);
+        if (r) r.nextAt = Date.now() + next;
+      });
     }
-    await update(['training'], (d) => {
-      const r = (d.training || []).find((x) => x.id === rule.id);
-      if (r) r.nextAt = Date.now() + next;
-    });
   },
 
   // Hospital: heal every wounded unit the resources pay for.
@@ -1053,27 +1157,68 @@ const JOBS = {
       // Even when this look fails, the next finder scan waits its turn.
       if (d.schedule.finderVillage === vid) d.schedule.finderScanAt = Date.now() + jittered(12 * 3600000, 15);
     });
-    if (!v || v.x == null) return;
-    await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(vid)}`);
-    let { res } = await act(tabId, { kind: 'scanMap', x: v.x, y: v.y }, false);
-    // Refused or empty: open the map page itself and read what the game
-    // loads there (zoomed out, centred on the village).
-    if (!res.ok || !res.tiles) {
-      const first = res;
+    if (!v) return;
+    if (v.x == null) { await log('error', t('log.scanNoCoords'), vid); return; }
+    // As far as this village's raid rules (or the finder) look, up to 77
+    // tiles: one map answer covers ±15.
+    const { raids = [], schedule = {} } = await read(['raids', 'schedule']);
+    const radius = Math.max(15, ...raids.filter((r) => r.villageId === vid).map((r) => Number(r.radius) || 0),
+      schedule.finderVillage === vid ? Number(schedule.finderRadius) || 25 : 0);
+    // Two ways to read the map: a request (through the game's own API
+    // client, else the extension's), or the map page itself, reading what
+    // the game loads there (zoomed out, centred on the village). The way
+    // that worked last time goes first. Every attempt is kept for the
+    // diagnostics report.
+    const { account = {} } = await read(['account']);
+    const attempts = [];
+    const ok = (r) => !!(r && r.ok && r.tiles);
+    const direct = async () => {
       try {
-        await navigate(tabId, `${s.server}/karte.php?zoom=3&x=${v.x}&y=${v.y}`);
-        ({ res } = await act(tabId, { kind: 'mapTiles' }, false));
+        await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(vid)}`);
+        const { res: r } = await act(tabId, { kind: 'scanMap', x: v.x, y: v.y, radius }, false);
+        attempts.push(...(r.diag || []));
+        if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'request', ok: false, error: reasonText(r) });
+        return r;
       } catch (e) {
         if (e.loggedOut) throw e;
-        res = { ok: false, code: 'mapApi' };
+        attempts.push({ how: 'request', ok: false, error: e.message });
+        return { ok: false, code: 'mapApi' };
       }
-      if (!res.ok) res = first.ok ? res : first;
+    };
+    const page = async () => {
+      try {
+        await navigate(tabId, `${s.server}/karte.php?zoom=3&x=${v.x}&y=${v.y}`);
+        const { res: r } = await act(tabId, { kind: 'mapTiles' }, false);
+        attempts.push(...(r.diag || []));
+        if (!r.ok && !(r.diag || []).length) attempts.push({ how: 'page', ok: false, error: reasonText(r) });
+        return r;
+      } catch (e) {
+        if (e.loggedOut) throw e;
+        attempts.push({ how: 'page', ok: false, error: e.message });
+        return { ok: false, code: 'mapApi' };
+      }
+    };
+    const order = account.mapMethod === 'page' ? [page, direct] : [direct, page];
+    let res = await order[0]();
+    if (!ok(res)) {
+      const second = await order[1]();
+      if (ok(second) || !res.ok) res = second;
     }
-    await update(['raids'], (d) => {
-      for (const r of d.raids || []) if (r.villageId === vid) r.scannedAt = Date.now();
+    const at = Date.now();
+    await update(['raids', 'account'], (d) => {
+      // A failed look is tried again in half an hour, not in 12 hours.
+      for (const r of d.raids || []) if (r.villageId === vid) { if (ok(res)) { r.scannedAt = at; r.scanFailAt = null; } else r.scanFailAt = at; }
+      d.account = d.account || {};
+      d.account.mapDiag = {
+        at, village: v.name, ok: ok(res), method: res.method || null, tiles: res.tiles || 0,
+        oases: (res.oases || []).length, players: (res.villages || []).length, valleys: (res.valleys || []).length,
+        attempts: attempts.slice(0, 20), sample: res.sample || [],
+      };
+      if (ok(res)) d.account.mapMethod = res.method === 'page' ? 'page' : 'direct';
     });
-    if (!res.ok) {
-      await log('error', t('log.scanFailed', { reason: res.status ? `HTTP ${res.status}` : reasonText(res) }), vid);
+    if (!ok(res)) {
+      const why = attempts.map((a) => `${a.how}: ${a.ok ? 'ok' : a.status ? `HTTP ${a.status}` : a.error || '—'}`).join(' · ').slice(0, 220);
+      await log('error', t('log.scanFailed', { reason: why || reasonText(res) }), vid);
       return;
     }
     const now = Date.now();
@@ -1118,7 +1263,7 @@ const JOBS = {
       let { villages = {}, oases = {}, raids = [] } = await read(['villages', 'oases', 'raids']);
       const v = villages[vid];
       if (!v) return;
-      const unit = rule.unitName || t('troops.unitN', { n: rule.field.slice(1) });
+      const unit = rule.unitName || t('troops.unitN', { n: String(rule.field || '').slice(1) });
       if (v.underAttack) {
         next = Math.min(next, 15 * 60000);
         await log('info', t('log.raidSkipAttack'), vid);
@@ -1131,7 +1276,7 @@ const JOBS = {
         return;
       }
       const current = raids.find((r) => r.id === rule.id) || rule;
-      if (!current.scannedAt || Date.now() - current.scannedAt > SCAN_EVERY_MS) {
+      if ((!current.scannedAt || Date.now() - current.scannedAt > SCAN_EVERY_MS) && !(current.scanFailAt > Date.now() - 30 * 60000)) {
         await JOBS.scan(tabId, { villageId: vid }, s);
         ({ oases = {} } = await read(['oases']));
       }
@@ -1261,7 +1406,9 @@ const JOBS = {
   async farm(tabId, job, s) {
     const prefix = s.farm.villageId ? `newdid=${encodeURIComponent(s.farm.villageId)}&` : '';
     await navigate(tabId, `${s.server}/build.php?${prefix}gid=16&tt=99`);
-    const { res } = await act(tabId, { kind: 'farm', ids: s.farm.listIds || [] }, false);
+    const { villages = {} } = await read(['villages']);
+    const home = s.farm.villageId && villages[s.farm.villageId];
+    const { res } = await act(tabId, { kind: 'farm', ids: s.farm.listIds || [], villageName: home ? home.name : null }, false);
     if (res.ok) await log('success', t('log.farmSent', { what: res.started === 'all' ? t('log.farmAll') : t('log.farmCount', { n: res.started }) }));
     else await log('info', t('log.farmInfo', { reason: reasonText(res) }));
     await patchSchedule({ farmAt: Date.now() + jittered(s.farm.intervalMinutes * 60000, s.jitterPercent) });
@@ -1283,12 +1430,14 @@ const JOBS = {
     const c = CELEBRATIONS[job.kind];
     if (!canAfford(v, c.cost, Date.now())) return;
     const before = Object.values((v.resources || {}).stock || {}).reduce((n, x) => n + (x || 0), 0);
-    const { res } = await act(tabId, { kind: 'celebrate', great: job.kind === 'great' }, false);
+    const { res } = await act(tabId, { kind: 'celebrate', great: job.kind === 'great' }, true);
     const fail = async (reason) => {
       await patchVillage(vid, { celebrationFailAt: Date.now() });
       await log('error', t('log.celebrateFailed', { reason }), vid);
     };
-    if (!res.ok) { await fail(reasonText(res)); return; }
+    // No new page after the click: maybe the game took it in place; the
+    // check below (stock or a running celebration) decides.
+    if (!res.ok && res.code !== 'noNavigation') { await fail(reasonText(res)); return; }
     await sleep(rand(1500, 2500));
     page = await navigate(tabId, th);
     ({ villages = {} } = await read(['villages']));
@@ -1413,15 +1562,18 @@ async function expansionWatch(s, data, now) {
   const count = Object.keys(data.villages || {}).length;
   const changes = {};
   const news = [];
+  const all = Object.values(data.villages || {});
   for (const r of plan.rows) {
-    if (foundedNow(r.st, r.v, count, now)) {
+    if (foundedNow(r.st, r.v, count, now, all)) {
       changes[r.id] = { founded: true, foundedAt: now };
       news.push(['founded', r]);
     } else if (r.step === 'ready' && !r.st.readyCount) {
-      changes[r.id] = { readyCount: count, readyAt: now };
+      changes[r.id] = { readyCount: count, readyAt: now, target: r.target ? { x: r.target.x, y: r.target.y } : null };
       news.push(['ready', r]);
+    } else if (r.step === 'sent' && !r.st.sentAt) {
+      changes[r.id] = { sentAt: now }; // they just left home
     } else if (r.st.readyCount && r.step !== 'ready' && r.step !== 'sent') {
-      changes[r.id] = { readyCount: null, readyAt: null }; // settlers lost or never sent: start over
+      changes[r.id] = { readyCount: null, readyAt: null, sentAt: null, target: null }; // settlers lost or never sent: start over
     }
   }
   if (!Object.keys(changes).length) return;
@@ -1443,6 +1595,7 @@ async function expansionWatch(s, data, now) {
 function planRefresh(s, data, now, force) {
   const { villages = {}, schedule = {} } = data;
   if (!(s.watchEnabled || automationOn(s) || force)) return [];
+  if (!force && ((schedule.backoff || {})[jobKey({ type: 'refresh' })] || 0) > now) return [];
   if (force || now >= (schedule.refreshAt || 0)) return [{ type: 'refresh', label: t('job.refresh') }];
   const ids = Object.values(villages).filter((v) => v.needsRefresh).map((v) => v.id);
   return ids.length ? [{ type: 'refresh', villageIds: ids, label: t('job.refreshAttacked') }] : [];
@@ -1450,17 +1603,27 @@ function planRefresh(s, data, now, force) {
 
 // Planned after any refresh, so decisions use what the game shows right now.
 function planActions(s, data, now) {
-  const { villages = {}, tasks = {}, training = [], raids = [], farms = [], schedule = {}, account = {} } = data;
+  const { villages = {}, farms = [], schedule = {} } = data;
   const jobs = [];
   // Asked for from the dashboard: runs even with automation off.
   if (schedule.scanVillage && villages[schedule.scanVillage]) {
-    jobs.push({ type: 'scan', villageId: schedule.scanVillage, label: t('job.scan', { v: villages[schedule.scanVillage].name }) });
+    jobs.push({ type: 'scan', villageId: schedule.scanVillage, asked: true, label: t('job.scan', { v: villages[schedule.scanVillage].name }) });
   }
   const farmNow = new Set(schedule.farmNow || []);
   for (const list of farms) {
-    if (farmNow.has(list.id) && villages[list.villageId]) jobs.push({ type: 'farmList', listId: list.id, label: t('job.farmList', { list: list.name }) });
+    if (farmNow.has(list.id) && villages[list.villageId]) jobs.push({ type: 'farmList', listId: list.id, asked: true, label: t('job.farmList', { list: list.name }) });
   }
   if (!automationOn(s) || !withinActiveHours(s.activeHours, new Date(now))) return jobs;
+  // A job that just failed waits a little before it is tried again.
+  const backoff = schedule.backoff || {};
+  return planAutomation(s, data, now, jobs).filter((j) => j.asked || !(backoff[jobKey(j)] > now));
+}
+
+const jobKey = (job) => `${job.type}:${job.villageId || job.listId || (job.rule && job.rule.id) || ''}`;
+
+function planAutomation(s, data, now, jobs) {
+  const { villages = {}, tasks = {}, training = [], raids = [], farms = [], schedule = {}, account = {} } = data;
+  const farmNow = new Set(schedule.farmNow || []);
   const ap = s.autopilot;
   const auto = ap.enabled;
   if (schedule.finderVillage && villages[schedule.finderVillage] && schedule.scanVillage !== schedule.finderVillage && now >= (schedule.finderScanAt || 0)) {
@@ -1546,17 +1709,41 @@ async function spendBeforeAttack(tabId, s, plan, vid, attackAt) {
   await bump('trained', unit.max);
 }
 
+// A job that failed waits before it is planned again (escapes and
+// donations have their own retries).
+async function backOff(job) {
+  const now = Date.now();
+  await update(['schedule'], (d) => {
+    const sc = d.schedule = d.schedule || {};
+    const b = Object.fromEntries(Object.entries(sc.backoff || {}).filter(([, until]) => until > now));
+    b[jobKey(job)] = now + (job.type === 'refresh' ? 5 : 10) * 60000;
+    sc.backoff = b;
+  });
+}
+
+const tabAlive = (tabId) => chrome.tabs.get(tabId).then(() => true, () => false);
+const OWN_STAGE = new Set(['escape', 'donate']); // run whatever the switches say
+let leaseRenewedAt = 0;
+
 // Runs jobs in order; returns false when the run should stop (logged out,
-// or the player started clicking around in the game).
+// the player started clicking around in the game, the switches were turned
+// off, or the bot tab was closed).
 async function runJobs(tabId, jobs, s, force) {
   for (const job of jobs) {
     if (urgent && job.type !== 'escape' && !job.quick) await runEscapeStage(tabId, s);
+    // Settings may have changed during the run ("Pause all", a switch).
+    s = mergeSettings((await read(['settings'])).settings);
+    if (!force && !job.asked && !OWN_STAGE.has(job.type) && !(automationOn(s) || (job.type === 'refresh' && s.watchEnabled))) return false;
+    // A long run keeps this browser's claim on the game fresh.
+    if (Date.now() - leaseRenewedAt > 60000) { leaseRenewedAt = Date.now(); await renewLease(); }
     await setStatus({ state: 'working', note: job.label });
     try {
       await JOBS[job.type](tabId, job, s);
       await noteJob(job.type, true);
     } catch (e) {
       if (e.loggedOut) return false; // processPage already alerted
+      if (!(await tabAlive(tabId))) return false; // bot tab closed: the next tick opens a new one
+      if (!OWN_STAGE.has(job.type) && !job.quick) await backOff(job);
       await noteJob(job.type, false, e.message);
       await log('error', `${job.label}: ${e.message}`);
       if (s.alerts.botErrors) {
@@ -1580,10 +1767,19 @@ const DATA_KEYS = ['settings', 'villages', 'tasks', 'training', 'raids', 'farms'
 let running = false;
 let rerunForced = false; // "Check now" pressed while a run was in progress
 let rerunSoon = false;   // a dashboard request (e.g. map scan) arrived during a run
+// The minute alarm during a long run: an escape that is due (or one whose
+// first try failed) goes ahead of the rest of the run.
+async function noteEscapeWork() {
+  const data = await read(DATA_KEYS);
+  const now = Date.now();
+  if (escapeRefreshIds(data, now).length || planEscapes(data, now).length) urgent = true;
+}
+
 async function tick(force = false, soon = false) {
   if (running) {
     if (force) rerunForced = true;
     else if (soon) rerunSoon = true;
+    else await noteEscapeWork();
     return { busy: true };
   }
   running = true;
@@ -1613,6 +1809,10 @@ async function tick(force = false, soon = false) {
     }
     if (escapeWork || urgent) await runEscapeStage(await ensureWorkerTab(s.server), s);
     if (!force && s.pauseWhenPlaying && (status.userActiveUntil || 0) > now) {
+      // What the player just asked for from the dashboard (a map scan, a
+      // farm list now) still runs.
+      const asked = planActions(s, data, now).filter((j) => j.asked);
+      if (asked.length) await runJobs(await ensureWorkerTab(s.server), asked, s, true);
       await setStatus({ state: 'paused', note: '' });
       return {};
     }
@@ -1630,6 +1830,12 @@ async function tick(force = false, soon = false) {
     }
     await setStatus({ state: 'idle', note: '', lastRunAt: Date.now() });
     return {};
+  } catch (e) {
+    // Opening the bot tab, reading storage…: say what went wrong instead of
+    // showing "working" forever.
+    await log('error', t('log.tickFailed', { e: e.message })).catch(() => {});
+    await setStatus({ state: 'idle', note: '' }).catch(() => {});
+    return { error: e.message };
   } finally {
     running = false;
     await refreshBadge();
@@ -1648,7 +1854,16 @@ async function tick(force = false, soon = false) {
 // ------------------------------------------------------ dashboard commands --
 const COMMANDS = {
   async saveSettings({ settings }) {
-    await update(['settings'], (d) => { d.settings = mergeSettings({ ...mergeSettings(d.settings), ...settings }); });
+    await update(['settings', 'status'], (d) => {
+      // A section sent in part (the web app) keeps the rest of what's saved.
+      const cur = mergeSettings(d.settings);
+      const next = { ...cur };
+      const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+      for (const [k, val] of Object.entries(settings || {})) next[k] = isObj(val) && isObj(cur[k]) ? { ...cur[k], ...val } : val;
+      d.settings = mergeSettings(next);
+      // Switched back on by hand: "paused with Pause all" no longer holds.
+      if (d.status && (d.settings.botEnabled || d.settings.autopilot.enabled)) { delete d.status.pausedAll; delete d.status.tgPaused; }
+    });
     await refreshBadge();
   },
   async addTask({ villageId, task }) {
@@ -1695,7 +1910,7 @@ const COMMANDS = {
   },
   // Oases typed in by the player; raided even outside the rule's radius.
   async addRaidTarget({ id, x, y }) {
-    if (!Number.isInteger(x) || !Number.isInteger(y) || Math.abs(x) > 400 || Math.abs(y) > 400) throw new Error(t('raid.badCoords'));
+    if (!Number.isInteger(x) || !Number.isInteger(y) || Math.abs(x) > MAP_EDGE || Math.abs(y) > MAP_EDGE) throw new Error(t('raid.badCoords'));
     await update(['raids'], (d) => {
       const r = (d.raids || []).find((z) => z.id === id);
       if (r && !(r.targets || []).some((p) => p.x === x && p.y === y)) r.targets = [...(r.targets || []), { x, y }];
@@ -1738,7 +1953,7 @@ const COMMANDS = {
       for (const tg of targets || []) {
         const x = Number(tg.x), y = Number(tg.y);
         const troops = cleanTroops(tg.troops);
-        if (!Number.isInteger(x) || !Number.isInteger(y) || Math.abs(x) > 400 || Math.abs(y) > 400 || !Object.keys(troops).length ||
+        if (!Number.isInteger(x) || !Number.isInteger(y) || Math.abs(x) > MAP_EDGE || Math.abs(y) > MAP_EDGE || !Object.keys(troops).length ||
           l.targets.some((o) => o.x === x && o.y === y)) { skipped += 1; continue; }
         l.targets.push({ id: uid(), x, y, name: String(tg.name || '').slice(0, 40), type: tg.type === 'oasis' ? 'oasis' : 'village', troops, enabled: true });
         added += 1;
@@ -1754,7 +1969,7 @@ const COMMANDS = {
     }
     if ('x' in clean || 'y' in clean) {
       clean.x = Number(clean.x); clean.y = Number(clean.y);
-      if (!Number.isInteger(clean.x) || !Number.isInteger(clean.y) || Math.abs(clean.x) > 400 || Math.abs(clean.y) > 400) throw new Error(t('raid.badCoords'));
+      if (!Number.isInteger(clean.x) || !Number.isInteger(clean.y) || Math.abs(clean.x) > MAP_EDGE || Math.abs(clean.y) > MAP_EDGE) throw new Error(t('raid.badCoords'));
     }
     if ('name' in clean) clean.name = String(clean.name || '').slice(0, 40);
     if ('type' in clean) clean.type = clean.type === 'oasis' ? 'oasis' : 'village';
@@ -1840,8 +2055,9 @@ const COMMANDS = {
   },
   // Inactive finder: scan around a village now, and again every ~12 h
   // while automation runs, so population changes show.
-  async finderScan({ villageId }) {
-    await patchSchedule({ scanVillage: villageId, finderVillage: villageId, finderScanAt: Date.now() + 12 * 3600000 });
+  async finderScan({ villageId, radius }) {
+    const r = Math.min(100, Math.max(3, Number(radius) || 25));
+    await patchSchedule({ scanVillage: villageId, finderVillage: villageId, finderRadius: r, finderScanAt: Date.now() + 12 * 3600000 });
     tick(false, true);
   },
   // New-village plan: the player marks a village as done (founded) or left
@@ -1873,7 +2089,9 @@ const COMMANDS = {
   async pauseAll({ from } = {}) {
     await update(['settings', 'status'], (d) => {
       const st = mergeSettings(d.settings);
-      d.status = { ...(d.status || {}), pausedAll: { botEnabled: st.botEnabled, autopilot: st.autopilot.enabled, at: Date.now() } };
+      // Pausing twice keeps what was on before the first time.
+      const was = (d.status || {}).pausedAll || { botEnabled: st.botEnabled, autopilot: st.autopilot.enabled, at: Date.now() };
+      d.status = { ...(d.status || {}), pausedAll: was };
       delete d.status.tgPaused;
       d.settings = mergeSettings({ ...st, botEnabled: false, autopilot: { ...st.autopilot, enabled: false } });
     });
@@ -1884,6 +2102,7 @@ const COMMANDS = {
     await update(['settings', 'status'], (d) => {
       const st = mergeSettings(d.settings);
       const status = d.status || {};
+      // Nothing paused (the popup's ▶ with everything off): automation on.
       const was = status.pausedAll || status.tgPaused || { botEnabled: true, autopilot: st.autopilot.enabled };
       d.settings = mergeSettings({ ...st, botEnabled: was.botEnabled || !was.autopilot, autopilot: { ...st.autopilot, enabled: !!was.autopilot } });
       delete status.pausedAll; delete status.tgPaused;
@@ -1906,7 +2125,12 @@ const COMMANDS = {
   async escapeNow() {
     const { escapes = [], villages = {} } = await read(['escapes', 'villages']);
     const now = Date.now();
-    const ids = escapes.filter((p) => p.enabled !== false && villages[p.villageId] && firstAttack(villages[p.villageId], now)).map((p) => p.villageId);
+    // Only plans that move troops and haven't dealt with this attack yet.
+    const ids = escapes.filter((p) => {
+      const v = villages[p.villageId];
+      const first = v && p.enabled !== false && p.troops !== false && firstAttack(v, now);
+      return first && !escapeDone(v, first);
+    }).map((p) => p.villageId);
     if (!ids.length) return [];
     await update(['schedule'], (d) => { d.schedule = { ...(d.schedule || {}), escapeNow: [...new Set([...((d.schedule || {}).escapeNow || []), ...ids])] }; });
     urgent = true;
@@ -1924,7 +2148,7 @@ const COMMANDS = {
   async sendSummary() {
     const s = await getSettings();
     if (!s.telegram.token || !s.telegram.chatId) throw new Error(t('tg.notSetUp'));
-    await sendTelegram(s, await runTelegramCommand('summary'));
+    if (!(await sendTelegram(s, await runTelegramCommand('summary')))) throw new Error(t('tg.sendFailed'));
     return true;
   },
   async testAlert() {
@@ -1935,7 +2159,7 @@ const COMMANDS = {
         title: t('test.title'), message: t('test.desktop'),
       });
     }
-    return sendRemote(s, t('test.remote'));
+    return { ...(await sendRemote(s, t('test.remote'))), desktop: !!s.alerts.desktop };
   },
   async clearLog() { await update(['log'], (d) => { d.log = []; }); },
   async exportData() {
@@ -1958,12 +2182,16 @@ const COMMANDS = {
     for (const [vid, list] of Object.entries(data.tasks || {})) {
       if (Array.isArray(list) && list.length) tasks[vid] = list.map((x) => ({ ...uidIfMissing(x), attempts: 0 }));
     }
-    const training = (Array.isArray(data.training) ? data.training : []).map((r) => ({ ...uidIfMissing(r), nextAt: 0 }));
-    const raids = (Array.isArray(data.raids) ? data.raids : []).map((r) => ({ ...uidIfMissing(r), nextAt: 0 }));
+    // Rules without what they need (an old or edited file) are left out.
+    const unit = (f) => typeof f === 'string' && /^t\d+$/.test(f);
+    const training = (Array.isArray(data.training) ? data.training : []).filter((r) => r && r.villageId && unit(r.troop) && Number(r.gid) > 0).map((r) => ({ ...uidIfMissing(r), nextAt: 0 }));
+    const raids = (Array.isArray(data.raids) ? data.raids : []).filter((r) => r && r.villageId && unit(r.field)).map((r) => ({ ...uidIfMissing(r), nextAt: 0 }));
     const farms = (Array.isArray(data.farms) ? data.farms : []).map((l) => ({ ...uidIfMissing(l), nextAt: 0, targets: (l.targets || []).map(uidIfMissing) }));
     const escapes = (Array.isArray(data.escapes) ? data.escapes : []).map(uidIfMissing);
     await update(['settings', 'tasks', 'training', 'raids', 'farms', 'escapes', 'villages'], (d) => {
-      d.settings = mergeSettings({ ...mergeSettings(d.settings), ...(data.settings || {}) });
+      // The game world stays this browser's own (a backup may come from another).
+      const cur = mergeSettings(d.settings);
+      d.settings = mergeSettings({ ...cur, ...(data.settings || {}), ...(cur.server ? { server: cur.server } : {}) });
       d.tasks = tasks;
       d.training = training;
       d.raids = raids;
@@ -1980,7 +2208,7 @@ const COMMANDS = {
     await setStatus({ state: 'idle', note: '' });
   },
   async syncNow() {
-    const pulled = await pullCommands();
+    const pulled = await pullCommands({ write: storeAll });
     const pushed = await pushCommands();
     return { pulled, pushed };
   },
@@ -2000,6 +2228,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'PAGE') {
     const tabId = sender.tab ? sender.tab.id : null;
+    // A page that isn't the game's (captcha, maintenance, an error page):
+    // only tells a waiting job at once, instead of after the full timeout.
+    if (!msg.state || msg.state.type === 'unknown') {
+      if (tabId != null && msg.state) resolvePage(tabId, msg.state);
+      sendResponse({ worker: false });
+      return undefined;
+    }
     processPage(msg.state, tabId)
       .then((r) => { resolvePage(tabId, msg.state); sendResponse(r); })
       .catch((e) => { resolvePage(tabId, msg.state); sendResponse({ error: e.message }); });
@@ -2015,9 +2250,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // --------------------------------------------------------------- telegram --
+// Resolves to whether Telegram took the message (never throws).
 const sendTelegram = (s, text) => fetch(`https://api.telegram.org/bot${encodeURIComponent(s.telegram.token)}/sendMessage`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: s.telegram.chatId, text }),
-}).catch(() => null);
+  signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
+}).then((r) => r.ok, () => false);
 
 const COMMAND_MAX_AGE_MS = 5 * 60 * 1000; // older commands (computer was off…) are not run
 
@@ -2058,9 +2295,11 @@ async function pollTelegram() {
 
     // Daily summary at the chosen hour (or within 3 hours of it, if the
     // computer was off or asleep right then).
-    const day = new Date(now).toDateString();
-    const late = new Date(now).getHours() - Number(s.telegram.summaryHour);
-    if (s.telegram.summaryHour >= 0 && late >= 0 && late < 3 && tgState.summaryDay !== day) {
+    // Hours since the summary hour, across midnight too (23:00 → 00:30 is 1);
+    // the day is the one the summary hour fell on.
+    const late = (new Date(now).getHours() - Number(s.telegram.summaryHour) + 24) % 24;
+    const day = new Date(now - late * 3600000).toDateString();
+    if (s.telegram.summaryHour >= 0 && late < 3 && tgState.summaryDay !== day) {
       tgState.summaryDay = day;
       await chrome.storage.local.set({ tgState });
       const reply = await runTelegramCommand('summary');
@@ -2077,11 +2316,13 @@ async function pollTelegram() {
     let offset = tgState.offset || 0;
     for (const u of json.result || []) {
       offset = Math.max(offset, u.update_id + 1);
+      // Saved before acting: a command that fails is not run again.
+      await chrome.storage.local.set({ tgState: { ...tgState, offset } });
       const m = u.message;
       if (!fresh || !m || !m.text || String(m.chat && m.chat.id) !== String(s.telegram.chatId)) continue;
       const cmd = parseCommand(m.text);
+      if (now - m.date * 1000 > COMMAND_MAX_AGE_MS) { if (cmd) await sendTelegram(s, t('tg.tooOld')); continue; }
       if (!cmd) { await sendTelegram(s, helpText()); continue; }
-      if (now - m.date * 1000 > COMMAND_MAX_AGE_MS) { await sendTelegram(s, t('tg.tooOld')); continue; }
       const reply = await runTelegramCommand(cmd);
       if (reply) await sendTelegram(s, reply);
     }
@@ -2186,7 +2427,7 @@ async function setup() {
   await getDevice();
   // Restore commands saved from another browser (or before a reinstall),
   // then save this browser's commands.
-  const pulled = await pullCommands();
+  const pulled = await pullCommands({ write: storeAll });
   if (pulled.pulled) await log('info', t('log.syncRestored', { from: pulled.from }));
   await pushCommands();
   await refreshBadge();
@@ -2198,7 +2439,7 @@ async function setup() {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && COMMAND_KEYS.some((k) => k in changes)) schedulePush();
   if (area === 'sync' && changes.cmdMeta) {
-    pullCommands().then(async (r) => {
+    pullCommands({ write: storeAll }).then(async (r) => {
       if (r.pulled) {
         await getSettings();
         await log('info', t('log.syncUpdated', { from: r.from }));
@@ -2209,6 +2450,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 chrome.runtime.onInstalled.addListener(setup);
 chrome.runtime.onStartup.addListener(setup);
+// The minute alarm is made at install and browser start; if it is ever
+// missing, every wake-up of this worker puts it back.
+chrome.alarms.get('tick').then((a) => { if (!a) chrome.alarms.create('tick', { periodInMinutes: 1 }); });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'tick' || a.name === 'webPoll') webSync();
   if (a.name === 'tick') { pollTelegram(); tick(); }

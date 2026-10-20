@@ -390,6 +390,7 @@
           <button class="btn" id="addTarget" data-i18n="raid.addTarget"></button>
           <span id="targetMsg" class="small muted"></span>
         </div>
+        <p id="mapDiagLine" class="small muted"></p>
         <div class="table-wrap"><table class="list" id="oasisTable"></table></div>
         <p class="muted small" data-i18n="raid.safety"></p>
       </div>
@@ -554,6 +555,16 @@
     <section class="tab" id="tab-health">
       <div class="panel health-head" id="healthHead"></div>
       <div class="cols" id="healthSections"></div>
+      <div class="panel" id="diagPanel">
+        <h2 data-i18n="diag.title"></h2>
+        <p class="muted small" data-i18n="diag.help"></p>
+        <div class="row wrap">
+          <button class="btn primary" id="diagCopy" data-i18n="diag.copy"></button>
+          <button class="btn" id="diagSave" data-i18n="diag.save"></button>
+          <span id="diagMsg" class="small muted" role="status"></span>
+        </div>
+        <details><summary class="small" data-i18n="diag.preview"></summary><pre id="diagText" class="diag-text" dir="ltr"></pre></details>
+      </div>
     </section>
 
     <!-- ===================================================== System: log -->

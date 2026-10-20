@@ -1,6 +1,6 @@
 // Farm lists kept in the extension: lists, their targets and troops, and
 // the editor for adding or changing targets.
-import { command, esc, fillSelect } from '../src/ui.js';
+import { command, esc, fillSelect, editingIn, automationOn } from '../src/ui.js';
 import { sortedVillages, fmtDuration, fmtAgo } from '../src/shared.js';
 import { unitField, distance, parseCoordList, cleanTroops } from '../src/autopilot.js';
 import { t, coords } from '../src/i18n.js';
@@ -12,6 +12,7 @@ const FIELDS = Array.from({ length: 10 }, (_, i) => `t${i + 1}`);
 let data = null;
 let selected = (() => { try { return localStorage.getItem('tvh.farmList') || ''; } catch (e) { return ''; } })();
 let editing = null; // target id being edited
+let justAdded = null; // a list just created, until it shows up in storage
 
 const lists = () => data.farms || [];
 const current = () => lists().find((l) => l.id === selected) || null;
@@ -63,7 +64,7 @@ function renderLists(now) {
     ? `<tr>${head}<th></th></tr>` + lists().map((l) => {
       const v = data.villages[l.villageId];
       const on = (l.targets || []).filter((x) => x.enabled !== false).length;
-      const next = l.enabled === false ? '—' : l.nextAt && l.nextAt > now ? fmtDuration(l.nextAt - now) : t('troops.due');
+      const next = l.enabled === false ? '—' : l.nextAt && l.nextAt > now ? fmtDuration(l.nextAt - now) : automationOn(data.settings) ? t('troops.due') : t('troops.needsAuto');
       return `<tr class="${l.id === selected ? 'selected' : ''}">
         <td><button type="button" class="link" data-fl-select="${esc(l.id)}">${esc(l.name)}</button></td>
         <td>${esc(v ? v.name : t('troops.gone'))}</td>
@@ -123,13 +124,13 @@ function renderTargets(now) {
         <button class="btn small danger" data-ft-remove="${esc(tg.id)}" title="${esc(t('build.remove'))}">✕</button>
       </td>
     </tr>`).join('');
-  if (!$('ftTable').contains(document.activeElement)) {
+  if (!editingIn($('ftTable'))) {
     $('ftTable').innerHTML = rows ? `<tr>${head}<th></th></tr>${rows}` : `<tr><td class="muted">${esc(t('farm.noTargets'))}</td></tr>`;
   }
 
   // Troop editor: one box per unit of this village's tribe.
   const sig = JSON.stringify([l.id, names, home, data.settings.language]);
-  if ($('ftTroops').dataset.sig !== sig) {
+  if ($('ftTroops').dataset.sig !== sig && !editingIn($('ftTroops'))) {
     const keep = readTroops();
     $('ftTroops').dataset.sig = sig;
     $('ftTroops').innerHTML = FIELDS.map((f) => `<label class="troop-box">
@@ -168,7 +169,8 @@ const msg = (text, tone = 'muted') => { $('ftMsg').textContent = text; $('ftMsg'
 
 export function renderFarms(d, now) {
   data = d;
-  if (selected && !current()) selected = '';
+  if (justAdded && lists().some((l) => l.id === justAdded)) { select(justAdded); justAdded = null; }
+  if (selected && !current() && selected !== justAdded) selected = '';
   if (!selected && lists().length) selected = lists()[0].id;
   renderLists(now);
   renderTargets(now);
@@ -187,6 +189,7 @@ $('flAdd').addEventListener('click', async () => {
   if (!list.villageId || !(list.everyMinutes >= 5)) return;
   const r = await command('addFarmList', { list });
   $('flName').value = '';
+  justAdded = r.id;
   select(r.id);
   rerender();
 });

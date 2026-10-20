@@ -33,15 +33,22 @@ export function unitKind(unit) {
 
 // First unit number of the player's tribe (0, 10, 20, …), from any unit the
 // extension has seen in their villages; null until one was seen.
+// What the villages can train comes first: troops at home may include
+// allies' reinforcements of another tribe.
 export function tribeBase(villages) {
-  for (const v of Object.values(villages || {})) {
-    const seen = [...((v && v.troops) || []).map((x) => x.unit),
-      ...Object.values((v && v.trainingQueue) || {}).flatMap((q) => (q.items || []).map((x) => x.unit)),
-      ...Object.values((v && v.units) || {}).flat().map((x) => x.unit)];
-    for (const u of seen) {
-      const n = num(u);
-      const base = Math.floor((n - 1) / 10) * 10;
-      if (n && base !== 30) return base;
+  const all = Object.values(villages || {}).filter(Boolean);
+  const sources = [
+    (v) => Object.values(v.units || {}).flat().map((x) => x.unit),
+    (v) => Object.values(v.trainingQueue || {}).flatMap((q) => (q.items || []).map((x) => x.unit)),
+    (v) => (v.troops || []).map((x) => x.unit),
+  ];
+  for (const from of sources) {
+    for (const v of all) {
+      for (const u of from(v)) {
+        const n = num(u);
+        const base = Math.floor((n - 1) / 10) * 10;
+        if (n && base !== 30) return base;
+      }
     }
   }
   return null;

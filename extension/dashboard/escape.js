@@ -1,6 +1,6 @@
 // Defense page: escape plans — which village's troops leave when an attack
 // comes, where to, and how long before it lands — and alliance donations.
-import { command, esc, fillSelect, escapeStatus } from '../src/ui.js';
+import { command, esc, fillSelect, escapeStatus, editingIn } from '../src/ui.js';
 import { donateStatus } from '../src/escape.js';
 import { sortedVillages, buildingName } from '../src/shared.js';
 import { unitField } from '../src/autopilot.js';
@@ -48,7 +48,7 @@ function renderTable(now) {
       </td>
     </tr>`;
   }).join('');
-  if (!$('escapeTable').contains(document.activeElement)) {
+  if (!editingIn($('escapeTable'))) {
     $('escapeTable').innerHTML = rows ? `<tr>${head}<th></th></tr>${rows}` : `<tr><td class="muted">${esc(t('escape.none'))}</td></tr>`;
   }
 }
@@ -79,6 +79,7 @@ function renderForm() {
   const v = data.villages[vid];
   fillSelect($('escTarget'), [['', t('escape.nearest')], ...villages.filter((o) => o.id !== vid).map((o) => [o.id, `${o.name} ${coords(o.x, o.y)}`])], $('escTarget').dataset.want);
   $('escTarget').dataset.want = $('escTarget').value;
+  const names = unitNames(v);
   // Units this village can train (seen on its barracks/stable/workshop pages).
   const spend = [['', t('escape.spendNone')]];
   for (const [gid, list] of Object.entries((v && v.units) || {})) {
@@ -98,7 +99,6 @@ function renderForm() {
 
   // Unit choice, only when "all units" is off.
   $('escUnits').hidden = $('escAll').checked;
-  const names = unitNames(v);
   const sig = JSON.stringify([vid, names, data.settings.language]);
   if ($('escUnits').dataset.sig !== sig) {
     const want = new Set(($('escUnits').dataset.want || Array.from(document.querySelectorAll('#escUnits input:checked')).map((el) => el.value).join(',')).split(',').filter(Boolean));

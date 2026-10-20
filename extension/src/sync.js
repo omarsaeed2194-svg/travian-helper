@@ -82,7 +82,13 @@ export async function pushCommands() {
   if (json === state.json) return { pushed: false };
   const device = await getDevice();
   const chunks = [];
-  for (let i = 0; i < json.length; i += CHUNK_CHARS) chunks.push(json.slice(i, i + CHUNK_CHARS));
+  // Never cut an emoji (a surrogate pair) in two.
+  for (let i = 0; i < json.length;) {
+    let end = Math.min(json.length, i + CHUNK_CHARS);
+    if (end < json.length && /[\ud800-\udbff]/.test(json[end - 1])) end -= 1;
+    chunks.push(json.slice(i, end));
+    i = end;
+  }
   const items = { cmdMeta: { chunks: chunks.length, updatedAt: Date.now(), deviceId: device.id, deviceName: device.name } };
   chunks.forEach((c, i) => { items[`cmd${i}`] = c; });
   try {
@@ -131,12 +137,17 @@ export function mergeCommands(local, remote) {
       }),
     };
   });
-  return { settings: { ...(local.settings || {}), ...(remote.settings || {}) }, tasks, training, raids, farms, escapes: remote.escapes || [] };
+  // The game world stays this browser's own: another browser may play a
+  // different one (switching it here would wipe this one's villages).
+  const server = local.settings && local.settings.server;
+  return { settings: { ...(local.settings || {}), ...(remote.settings || {}), ...(server ? { server } : {}) }, tasks, training, raids, farms, escapes: remote.escapes || [] };
 }
 
 // Pull commands another browser saved. `force` applies them even when this
 // browser has local commands (used on a fresh install, and by "restore").
-export async function pullCommands({ force = false } = {}) {
+// `write` stores the result; the background passes its storage queue so a
+// page report can't overwrite what was just pulled.
+export async function pullCommands({ force = false, write = (x) => chrome.storage.local.set(x) } = {}) {
   const remote = await readRemote();
   if (!remote) return { pulled: false };
   const device = await getDevice();
@@ -149,7 +160,7 @@ export async function pullCommands({ force = false } = {}) {
     !(local.raids || []).length && !(local.farms || []).length && !(local.escapes || []).length;
   if (!force && !empty && !(fromElsewhere && newer)) return { pulled: false };
   const merged = mergeCommands(local, remote.data);
-  await chrome.storage.local.set({
+  await write({
     ...merged,
     syncState: { json: remote.json, chunks: remote.meta.chunks, savedAt: remote.meta.updatedAt, pulledFrom: remote.meta.deviceName, error: null },
   });

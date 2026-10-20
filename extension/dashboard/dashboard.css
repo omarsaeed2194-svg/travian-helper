@@ -548,3 +548,7 @@ svg.chart .hit { fill: transparent; }
 .cu-bar { height: 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
 .cu-bar i { display: block; height: 100%; background: var(--series-1); border-radius: 999px; }
 .cu-slots.free .cu-bar i { background: var(--good-mark); }
+
+/* Diagnostics report preview */
+.diag-text { max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px; line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0 0; text-align: left; }

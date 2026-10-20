@@ -10,6 +10,7 @@ let lang = null;
 // Many villages → one line each (tap to open); the choice is remembered.
 let view = (() => { try { return localStorage.getItem('tvh.popupView') || 'auto'; } catch (e) { return 'auto'; } })();
 const expanded = new Set();
+const busy = new Set(); // quick-action buttons waiting out their pause
 let lastList = '';
 
 const compact = (n) => (view === 'auto' ? n > 3 : view === 'compact');
@@ -41,10 +42,10 @@ function render() {
   $('qaPause').innerHTML = running ? `<span aria-hidden="true">⏸</span> ${esc(t('qa.pause'))}` : `<span aria-hidden="true">▶</span> ${esc(t('qa.resume'))}`;
   $('qaPause').dataset.action = running ? 'pause' : 'resume';
   const lists = data.farms.filter((l) => l.enabled !== false && (l.targets || []).some((x) => x.enabled !== false));
-  $('qaFarms').disabled = !lists.length || !s.server;
+  $('qaFarms').disabled = busy.has('qaFarms') || !lists.length || !s.server;
   $('qaFarms').title = lists.length ? t('qa.farmsTitle', { n: lists.length }) : t('tg.noFarms');
   $('qaEscape').hidden = !data.escapes.some((p) => p.enabled !== false && data.villages[p.villageId] && firstAttack(data.villages[p.villageId], now));
-  $('qaCheck').disabled = !s.server;
+  $('qaCheck').disabled = busy.has('qaCheck') || !s.server;
 
   const villages = sortedVillages(data.villages);
   // Attacked villages first.
@@ -72,11 +73,13 @@ function say(text, tone = '') {
   $('qaMsg').className = `small qa-msg ${tone || 'muted'}`;
 }
 
-// Runs a quick action with its button disabled for a moment.
+// Runs a quick action with its button disabled for a moment (the
+// once-a-second redraw keeps it so, against double clicks).
 async function quick(btn, fn) {
+  busy.add(btn.id);
   btn.disabled = true;
   try { say(await fn(), 'good-text'); } catch (err) { say(err.message, 'bad'); }
-  setTimeout(() => { btn.disabled = false; render(); }, 2000);
+  setTimeout(() => { busy.delete(btn.id); btn.disabled = false; render(); }, 2000);
 }
 
 $('watch').addEventListener('change', (e) => command('saveSettings', { settings: { watchEnabled: e.target.checked } }));

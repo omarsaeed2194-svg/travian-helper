@@ -23,7 +23,7 @@ const $ = (id) => document.getElementById(id);
 const ALL = 'all';
 const TIP_LIMIT = 8;
 const KEY_BUILDINGS = [15, 10, 11, 23, 16, 17, 19, 20, 25, 26];
-const WALLS = [31, 32, 33, 42, 43];
+const WALLS = [31, 32, 33, 42, 43, 47];
 const ICONS = { attack: '⚔', shield: '🛡', crop: '🌾', storage: '📦', build: '🏗', balance: '⚖', bonus: '⭐', clock: '🕒', alert: '🔔', hero: '🧭', farm: '🐎' };
 
 let filter = (() => { try { return localStorage.getItem('tvh.ovFilter') || ALL; } catch (e) { return ALL; } })();
@@ -31,6 +31,7 @@ let showAllTips = false;
 let chartKey = '';
 let lastTips = [];
 let forceTips = false;
+let pressing = null; // #ovRes / #ovTroops while a button in it is held down
 
 function setFilter(value) {
   filter = value;
@@ -245,7 +246,7 @@ function renderTable(villages, data, now) {
       <td>${why ? `<small>${esc(why.text)}</small>` : '<span class="muted">—</span>'}</td>
     </tr>`;
   });
-  $('ovRes').innerHTML = `<div class="table-wrap"><table class="list ov-table"><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
+  if (pressing !== 'ovRes') $('ovRes').innerHTML = `<div class="table-wrap"><table class="list ov-table"><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
 }
 
 // ------------------------------------------------------------------ chart ---
@@ -314,7 +315,7 @@ function renderNext(scope, data, now) {
   if (rules.length && on) {
     const r = rules.slice().sort((a, b) => (a.nextAt || 0) - (b.nextAt || 0))[0];
     const v = data.villages[r.villageId];
-    const unit = (v.units && v.units[r.gid] && (v.units[r.gid].find((u) => u.field === r.troop) || {}).name) || t('troops.unitN', { n: r.troop.slice(1) });
+    const unit = (v.units && v.units[r.gid] && (v.units[r.gid].find((u) => u.field === r.troop) || {}).name) || t('troops.unitN', { n: String(r.troop || '').slice(1) });
     rows.push([t('ov.nextTrain'), t('ov.trainIn', { u: `${r.amount} × ${unit}`, v: v.name, t: left(r.nextAt) })]);
   }
   const lists = (data.farms || []).filter((l) => l.enabled !== false && ids.has(l.villageId) && (l.targets || []).some((x) => x.enabled !== false));
@@ -347,6 +348,7 @@ function renderTroops(scope, now) {
   const training = infos.reduce((n, x) => n + x.info.trainingTotal, 0);
   $('ovTroopsMeta').textContent = infos.some((x) => x.info.seen) ? t('ov.troopsSummary', { n: fmtNum(total), m: fmtNum(training) }) : '';
   if (scope.length > 1) {
+    if (pressing === 'ovTroops') return;
     $('ovTroops').innerHTML = `<ul class="feed">${infos.map(({ v, info }) => `<li>
         <span><button type="button" class="link" data-filter="${esc(v.id)}">${esc(v.name)}</button><br><small class="muted">${esc(info.seen
           ? info.home.filter((x) => x.unit !== 'hero').slice().sort((a, b) => b.count - a.count).slice(0, 3).map((x) => `${x.count} ${x.name}`).join(' · ') || t('ov.noTroops')
@@ -520,11 +522,11 @@ function renderHero(data) {
   const sig = JSON.stringify([hero, auto, langNow]);
   if (artCache.hero === sig) return;
   artCache.hero = sig;
-  const status = hero.home ? t('hero.home') : t('hero.away');
+  const status = hero.home == null ? '—' : hero.home ? t('hero.home') : t('hero.away'); // not read yet: —
   $('ovHero').innerHTML = `<div class="hero-avatar">${heroArt({ home: hero.home !== false })}${hero.image ? `<img class="hero-photo" alt="" src="${esc(hero.image)}">` : ''}</div>
     <div class="hero-info">
       <h2>${esc(t('hero.title'))}</h2>
-      <span class="status-pill ${hero.home ? 'home' : 'away'}">${esc(status)}</span>
+      <span class="status-pill ${hero.home == null ? '' : hero.home ? 'home' : 'away'}">${esc(status)}</span>
       <span class="hero-line"><b>${esc(String(hero.adventures ?? '—'))}</b> ${esc(t('hero.adventures'))}</span>
       <span class="hero-line small muted">${esc(t('hero.auto'))}: ${esc(auto ? t('ov.on') : t('ov.off'))}</span>
     </div>`;
@@ -561,6 +563,14 @@ export function renderOverview(data, now) {
   renderMoves(scope, now);
   renderActivity(scope, data, now);
 }
+
+// These two are redrawn every second: not while a button in them is held
+// down, or the click would be lost with the button it started on.
+document.addEventListener('pointerdown', (e) => {
+  const box = e.target.closest && e.target.closest('#ovRes, #ovTroops');
+  pressing = box ? box.id : null;
+});
+for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, () => { setTimeout(() => { pressing = null; }, 0); });
 
 // Clicks: filter chips, village names in the table, tip actions, "show more".
 document.addEventListener('click', (e) => {

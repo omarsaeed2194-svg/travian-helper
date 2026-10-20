@@ -52,7 +52,8 @@ export function escapeTarget(v, plan, villages) {
   const safe = (o) => o && o.id !== v.id && !o.underAttack && o.x != null && o.y != null;
   const chosen = plan.targetVillageId ? villages[plan.targetVillageId] : null;
   if (safe(chosen)) return { village: chosen, fallback: false };
-  const others = Object.values(villages || {}).filter(safe).sort((a, b) => distance(v, a) - distance(v, b));
+  const d = (o) => { const x = distance(v, o); return Number.isFinite(x) ? x : Infinity; };
+  const others = Object.values(villages || {}).filter(safe).sort((a, b) => d(a) - d(b));
   return others.length ? { village: others[0], fallback: !!plan.targetVillageId } : null;
 }
 
@@ -133,8 +134,12 @@ export function donationAmounts(v, plan, now = Date.now(), tribeBase = null) {
   const est = estimateStock(v, now);
   if (!est) return null;
   const keep = plan.donate && plan.donate.keepCranny !== false ? crannyHides(v, tribeBase) : 0;
+  // A village that eats more crop than it makes keeps 12 hours of it, so
+  // the troops that stay don't starve.
+  const prod = (v.resources && v.resources.production) || {};
+  const cropKeep = prod.crop < 0 ? -prod.crop * 12 : 0;
   const out = {};
-  for (const k of RESOURCES) out[k] = Math.max(0, Math.floor(est[k] - keep));
+  for (const k of RESOURCES) out[k] = Math.max(0, Math.floor(est[k] - Math.max(keep, k === 'crop' ? cropKeep : 0)));
   return RESOURCES.reduce((n, k) => n + out[k], 0) >= 100 ? out : null;
 }
 

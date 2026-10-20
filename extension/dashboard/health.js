@@ -4,12 +4,41 @@ import { esc } from '../src/ui.js';
 import { fmtAgo } from '../src/shared.js';
 import { t } from '../src/i18n.js';
 import { healthReport } from '../src/health.js';
+import { diagnosticsReport } from '../src/diagnostics.js';
 
 const $ = (id) => document.getElementById(id);
 const MARK = { good: '✓', warn: '!', bad: '✕', muted: '–' };
 let bytes = null;
 let bytesAt = 0;
 let last = '';
+let lastData = null;
+
+// The diagnostics report: copied or saved as a file, shown below.
+const report = () => diagnosticsReport(lastData, {
+  version: chrome.runtime.getManifest().version,
+  browser: (navigator.userAgent.match(/(Chrome|Edg|OPR|Firefox)\/[\d.]+/g) || []).join(' ') || 'unknown',
+});
+$('diagCopy').addEventListener('click', async () => {
+  if (!lastData) return;
+  const text = report();
+  $('diagText').textContent = text;
+  try {
+    await navigator.clipboard.writeText(text);
+    $('diagMsg').textContent = t('diag.copied');
+  } catch (e) {
+    $('diagMsg').textContent = t('diag.copyFailed');
+    $('diagText').closest('details').open = true;
+  }
+});
+$('diagSave').addEventListener('click', () => {
+  if (!lastData) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([report()], { type: 'text/plain' }));
+  a.download = `travian-helper-diagnostics-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+document.querySelector('#diagPanel details').addEventListener('toggle', (e) => { if (e.target.open && lastData) $('diagText').textContent = report(); });
 
 async function storageUse() {
   if (Date.now() - bytesAt < 30000) return;
@@ -25,6 +54,7 @@ const rowHtml = (r) => `<li class="hl-row t-${r.tone}">
   </li>`;
 
 export function renderHealth(data, now) {
+  lastData = data;
   storageUse();
   const rep = healthReport(data, now);
   const rows = rep.sections.filter((s) => s.key !== 'errors').flatMap((s) => s.rows);

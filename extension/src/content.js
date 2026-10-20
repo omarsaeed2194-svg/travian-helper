@@ -3,7 +3,16 @@
 (() => {
   'use strict';
   const P = globalThis.TravianParser;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Every wait ends with a hop through a message, so timers never chain: in
+  // a hidden tab (the bot's own) Chrome holds a chain of five or more timers
+  // to one wake-up a minute once the tab has been hidden for five minutes,
+  // which would stall every action with several steps.
+  const hop = () => new Promise((r) => {
+    const c = new MessageChannel();
+    c.port1.onmessage = () => { c.port1.close(); r(); };
+    c.port2.postMessage(0);
+  });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms)).then(hop);
   const rand = (a, b) => a + Math.random() * (b - a);
 
   async function waitFor(fn, timeout = 8000, step = 250) {
@@ -29,7 +38,12 @@
       await waitFor(() => document.querySelector('.heroItems') && !document.querySelector('.inventoryPageWrapper.loading'));
     }
     const state = P.parsePage(document, location.href);
-    if (state.type === 'unknown') return;
+    // When this page started loading: lets the background tell a late
+    // report of the page before from the one a job is waiting for.
+    state.loadedAt = Math.round(performance.timeOrigin || Date.now());
+    // Not a game page (captcha, maintenance, error): say so, so a job
+    // waiting for a page learns at once instead of after its timeout.
+    if (state.type === 'unknown') state.title = document.title.slice(0, 80);
     try {
       const res = await chrome.runtime.sendMessage({ type: 'PAGE', state });
       if (res && res.worker) showWorkerBadge(res.badge);
@@ -68,14 +82,29 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // The game version the map API expects in its X-Version header.
+  // The game version the map API expects in its X-Version header: inline
+  // on older pages; on newer ones only in the asset paths (gpack/655.4/).
   function gameVersion() {
     for (const s of document.querySelectorAll('script:not([src])')) {
       const m = s.textContent.match(/Travian\.Game\.version\s*=\s*['"]([^'"]+)['"]/) ||
         s.textContent.match(/["']?gameVersion["']?\s*[:=]\s*['"]([^'"]+)['"]/);
       if (m) return m[1];
     }
+    for (const el of document.querySelectorAll('link[href*="gpack/"], script[src*="gpack/"], img[src*="gpack/"]')) {
+      const m = (el.getAttribute('href') || el.getAttribute('src') || '').match(/gpack\/(\d+(?:\.\d+)*)\//);
+      if (m) return m[1];
+    }
     return null;
+  }
+
+  // Map request centres covering `radius` around (x, y): one answer covers
+  // 31×31 tiles (±15) at the zoom the bot asks for.
+  function scanCenters(x, y, radius) {
+    const n = Math.min(2, Math.max(0, Math.ceil((radius - 15) / 31)));
+    const wrap = (c) => ((((c + 200) % 401) + 401) % 401) - 200; // the map wraps around at ±200
+    const out = [{ x, y }];
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) if (i || j) out.push({ x: wrap(x + i * 31), y: wrap(y + j * 31) });
+    return out;
   }
 
   // The send form's mission radios: name="eventType" on current servers
@@ -133,27 +162,81 @@
       || (donatedBefore != null && donatedToday() > donatedBefore), 8000);
     return { ok: true, sent, message: box ? box.textContent.trim().slice(0, 200) : '', donatedBefore, donatedAfter: donatedToday() };
   }
+  // Given today: the shown count and the hidden field; whichever the game
+  // updated after a donation is the higher one.
   function donatedToday() {
+    const shown = document.querySelector('#dailyContributionTitleText .donationValueNumber, .donationValueNumber');
     const el = document.getElementById('donatedToday');
-    const n = el && el.value !== '' ? Number(el.value) : NaN;
-    return Number.isFinite(n) ? n : null;
+    const vals = [shown ? P.num(shown.textContent) : null, el && el.value !== '' ? Number(el.value) : null].filter((n) => Number.isFinite(n));
+    return vals.length ? Math.max(...vals) : null;
   }
 
   // Map tiles the game loaded on the map page, passed on by mapHook.js.
   const mapTiles = new Map();
+  const mapNotes = [];
   window.addEventListener('message', (e) => {
-    if (e.source !== window || !e.data || e.data.source !== 'tvh-map' || !Array.isArray(e.data.tiles)) return;
+    if (e.source !== window || !e.data) return;
+    if (e.data.source === 'tvh-map-note' && e.data.note && mapNotes.length < 30) mapNotes.push(e.data.note);
+    if (e.data.source !== 'tvh-map' || !Array.isArray(e.data.tiles)) return;
     for (const tile of e.data.tiles) {
       const pos = tile && (tile.position || tile);
       if (pos && pos.x != null && pos.y != null && mapTiles.size < 5000) mapTiles.set(`${pos.x}|${pos.y}`, tile);
     }
   });
-  const readTiles = (tiles) => ({ tiles: tiles.length, oases: P.oasesFromTiles(tiles), villages: P.villagesFromTiles(tiles), valleys: P.valleysFromTiles(tiles) });
+  // A few raw tiles (shortened) for the diagnostics report: if the game's
+  // format differs from what the readers expect, this shows how.
+  const sample = (tiles) => tiles.slice(0, 3).map((t) => JSON.stringify(t).slice(0, 400));
+  const readTiles = (tiles) => ({ tiles: tiles.length, oases: P.oasesFromTiles(tiles), villages: P.villagesFromTiles(tiles), valleys: P.valleysFromTiles(tiles), sample: sample(tiles) });
+
+  // The page's own world (pageBridge.js) can use the game's API client.
+  function bridge(kind, args, timeout = 30000) {
+    const id = Math.random().toString(36).slice(2);
+    return new Promise((resolve) => {
+      const done = (result) => { window.removeEventListener('message', on); clearTimeout(timer); resolve(result); };
+      const on = (e) => { if (e.source === window && e.data && e.data.source === 'tvh-bridge-reply' && e.data.id === id) done(e.data.result); };
+      const timer = setTimeout(() => done({ ok: false, attempts: [{ how: 'bridge', ok: false, error: 'no answer from the page' }] }), timeout);
+      window.addEventListener('message', on);
+      window.postMessage({ source: 'tvh-bridge', id, kind, args }, location.origin);
+    });
+  }
+
+  // One map request around (x, y): the game's own API client first (it adds
+  // whatever the game adds to its requests), else the extension's own.
+  async function mapAt(x, y, method, prefer) {
+    let version = null;
+    const diag = [];
+    if (method !== 'fetch') {
+      const viaGame = await bridge('mapPosition', { x, y, zoomLevel: 3, prefer });
+      diag.push(...(viaGame.attempts || []));
+      if (viaGame.ok && viaGame.tiles && viaGame.tiles.length) return { method: 'game', how: viaGame.how, tiles: viaGame.tiles, diag };
+      if (method === 'game') return { diag };
+      version = viaGame.version || null;
+    }
+    const headers = { 'Content-Type': 'application/json; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' };
+    version = version || gameVersion();
+    if (version) headers['X-Version'] = version;
+    let res;
+    try {
+      res = await fetch('/api/v1/map/position', {
+        method: 'POST', credentials: 'same-origin', headers,
+        body: JSON.stringify({ data: { x, y, zoomLevel: 3, ignorePositions: [] } }),
+      });
+    } catch (e) {
+      diag.push({ how: 'fetch', ok: false, error: e.message });
+      return { diag };
+    }
+    const json = await res.json().catch(() => null);
+    const tiles = P.findTiles(json) || [];
+    diag.push({ how: `fetch${version ? ` v${version}` : ' (no version)'}`, ok: res.ok && tiles.length > 0, status: res.status, shape: P.shapeOf(json), tiles: tiles.length, ...(res.ok ? {} : { body: JSON.stringify(json).slice(0, 300) }) });
+    if (!res.ok || !tiles.length) return { diag, status: res.status };
+    return { method: 'fetch', tiles, diag };
+  }
 
   const actions = {
     async upgrade() {
-      const btn = document.querySelector('.upgradeButtonsContainer .section1 button.build') ||
-        document.querySelector('.upgradeButtonsContainer button.green.build');
+      // Not the "faster with a video" button next to it (opens a video, no new page).
+      const btn = document.querySelector('.upgradeButtonsContainer .section1 button.build:not(.videoFeatureButton)') ||
+        document.querySelector('.upgradeButtonsContainer button.green.build:not(.videoFeatureButton)');
       if (!usable(btn)) return { ok: false, code: 'noUpgradeButton' };
       setTimeout(() => btn.click(), 50);
       return { ok: true, navigating: true };
@@ -192,17 +275,24 @@
       return { ok: true, navigating: true };
     },
 
-    async farm({ ids }) {
+    async farm({ ids, villageName }) {
       const root = await waitFor(() => document.getElementById('rallyPointFarmList'));
       if (!root) return { ok: false, code: 'noFarmPage' };
       let buttons;
       let startedAll = false;
+      const wrappers = Array.from(root.querySelectorAll('.villageWrapper'));
       if (ids && ids.length) {
         buttons = ids.map((id) => {
           const marker = root.querySelector(`[data-list="${CSS.escape(String(id))}"]`);
           const header = marker && marker.closest('.farmListHeader');
           return header && header.querySelector('button.startFarmList');
         });
+      } else if (villageName && wrappers.length) {
+        // One village chosen: only its lists ("Start all" starts every village's).
+        const clean = (x) => String(x || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim();
+        const mine = wrappers.find((w) => clean(w.querySelector('.villageName') && w.querySelector('.villageName').textContent) === clean(villageName));
+        if (!mine) return { ok: false, code: 'noFarmVillage' };
+        buttons = Array.from(mine.querySelectorAll('button.startFarmList'));
       } else {
         const all = root.querySelector('button.startAllFarmLists');
         startedAll = usable(all);
@@ -271,33 +361,37 @@
       return { ok: true, navigating: true };
     },
 
-    // Oases around a point, from the same map API the game's map uses.
-    async scanMap({ x, y }) {
-      const headers = { 'Content-Type': 'application/json; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' };
-      const version = gameVersion();
-      if (version) headers['X-Version'] = version;
-      let res;
-      try {
-        res = await fetch('/api/v1/map/position', {
-          method: 'POST', credentials: 'same-origin', headers,
-          body: JSON.stringify({ data: { x, y, zoomLevel: 3, ignorePositions: [] } }),
-        });
-      } catch (e) {
-        return { ok: false, code: 'mapApi' };
+    // Oases around a point, from the same map API the game's map uses:
+    // several requests when the radius is more than one answer covers.
+    async scanMap({ x, y, radius = 15 }) {
+      const diag = [];
+      const all = new Map();
+      let method = null, how = null, status = null;
+      const centers = scanCenters(x, y, radius);
+      const end = Date.now() + 100000; // well inside the background's wait for an answer
+      for (const [i, c] of centers.entries()) {
+        if (i && Date.now() > end) break;
+        if (i) await sleep(rand(700, 1500));
+        const r = await mapAt(c.x, c.y, method, how);
+        if (!i || !r.tiles) diag.push(...r.diag);
+        if (!r.tiles) { status = r.status; if (!i) break; continue; }
+        method = r.method; how = r.how;
+        for (const tile of r.tiles) { const p = tile.position || tile; all.set(`${p.x}|${p.y}`, tile); }
       }
-      if (!res.ok) return { ok: false, code: 'mapApi', status: res.status };
-      const json = await res.json().catch(() => null);
-      const tiles = (json && (json.tiles || (json.response && json.response.tiles))) || [];
-      return { ok: true, ...readTiles(tiles) };
+      if (!all.size) return { ok: false, code: 'mapApi', status, diag };
+      if (centers.length > 1) diag.push({ how: `${centers.length} areas`, ok: true, tiles: all.size });
+      return { ok: true, method, diag, ...readTiles([...all.values()]) };
     },
 
     // On the map page (karte.php): the tiles the game itself loaded there.
     async mapTiles() {
       window.postMessage({ source: 'tvh-map-get' }, location.origin);
-      await waitFor(() => mapTiles.size > 0, 12000);
-      await sleep(rand(1500, 2500)); // the rest of the view arrives in parts
-      if (!mapTiles.size) return { ok: false, code: 'mapApi' };
-      return { ok: true, ...readTiles([...mapTiles.values()]) };
+      await waitFor(() => mapTiles.size > 0, 15000);
+      if (mapTiles.size) await sleep(rand(1500, 2500)); // the rest of the view arrives in parts
+      const diag = mapNotes.map((n) => ({ how: `page ${n.path}`, ok: n.tiles > 0, status: n.status, shape: n.shape, tiles: n.tiles }));
+      if (!mapNotes.length) diag.push({ how: 'page', ok: false, error: 'no API answer seen on the map page (hook not run, or the game loaded nothing)' });
+      if (!mapTiles.size) return { ok: false, code: 'mapApi', diag };
+      return { ok: true, method: 'page', diag, ...readTiles([...mapTiles.values()]) };
     },
 
     // Empty building site: the chosen building's "Construct" button.
@@ -432,38 +526,63 @@
       const root = document.getElementById('build') || document;
       await sleep(rand(500, 1000));
       const shown = (el) => !!el && el.getClientRects().length > 0;
-      const buttons = Array.from(root.querySelectorAll('.research button, .research input[type="submit"], .cta button, .celebration button'))
-        .filter((b) => usable(b) && shown(b) && !b.closest('.upgradeButtonsContainer') && !/gold|exchange|npc|\bbuild\b/i.test(b.className));
-      const btn = great ? buttons[1] : buttons[0];
+      const ok = (b) => usable(b) && shown(b) && !b.closest('.upgradeButtonsContainer') && !/gold|exchange|npc|\bbuild\b/i.test(b.className);
+      const inside = (el) => Array.from(el.querySelectorAll('button, input[type="submit"]')).filter(ok);
+      // One block per celebration: the first is the small one, the second the great.
+      const blocks = Array.from(root.querySelectorAll('.research'));
+      let btn;
+      if (blocks.length) btn = inside(blocks[great ? 1 : 0] || document.createElement('div'))[0];
+      else btn = Array.from(root.querySelectorAll('.cta button, .celebration button')).filter(ok)[great ? 1 : 0];
       if (!btn) return { ok: false, code: 'noCelebrateButton' };
       setTimeout(() => btn.click(), 50);
-      await sleep(2500);
-      return { ok: true };
+      return { ok: true, navigating: true };
     },
 
     async adventure() {
-      const btn = await waitFor(() => document.querySelector('#heroAdventure tbody tr button:not([disabled])'));
+      // React marks a button it can't use with a class, not the attribute.
+      const btn = await waitFor(() => Array.from(document.querySelectorAll('#heroAdventure tbody tr button')).find(usable));
       if (!btn) return { ok: false, code: 'noAdventure' };
       const cells = btn.closest('tr') ? btn.closest('tr').querySelectorAll('td') : [];
-      const where = cells[1] ? cells[1].textContent.replace(/[‪-‮]/g, '').trim() : '';
+      const where = cells[1] ? cells[1].textContent.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim() : '';
       btn.click();
-      const cont = await waitFor(() => document.querySelector('button.continue'), 3000);
-      if (cont) cont.click();
-      await sleep(1000);
+      // Then a "continue" to press, or (other versions) the button just goes.
+      const cont = () => { const b = document.querySelector('button.continue'); return usable(b) ? b : null; };
+      await waitFor(() => cont() || !document.contains(btn) || !usable(btn), 4000);
+      const next = cont();
+      if (!next && document.contains(btn) && usable(btn)) return { ok: false, code: 'noAdventureStart' };
+      // Answer first: the last click may open another page.
+      if (next) setTimeout(() => next.click(), 50);
       return { ok: true, detail: where };
     },
   };
+
+  // What the page looked like when an action failed, for the diagnostics
+  // report: which page, its forms, buttons and fields (no values).
+  function probe() {
+    const build = document.getElementById('build');
+    const content = document.getElementById('content') || document.body;
+    const shown = (el) => el.getClientRects().length > 0;
+    const title = document.querySelector('.titleInHeader, h1');
+    return {
+      path: (location.pathname + location.search).replace(/([?&])newdid=\d+&?/, '$1').slice(0, 100),
+      title: title ? title.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) : '',
+      build: build ? build.className : null,
+      forms: Array.from(content.querySelectorAll('form')).map((f) => f.getAttribute('name') || f.id || (f.getAttribute('action') || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 60)).slice(0, 6),
+      buttons: Array.from(content.querySelectorAll('button')).filter(shown).map((b) => `${b.id ? `#${b.id}` : ''}.${Array.from(b.classList).slice(0, 4).join('.')}${b.disabled ? '[disabled]' : ''}`).slice(0, 12),
+      inputs: Array.from(content.querySelectorAll('input[name]')).map((i) => i.getAttribute('name')).slice(0, 20),
+    };
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || msg.type !== 'ACTION') return undefined;
     const fn = actions[msg.action && msg.action.kind];
     if (!fn) {
-      sendResponse({ ok: false, code: 'unknownAction' });
+      sendResponse({ ok: false, code: 'unknownAction', probe: probe() });
       return undefined;
     }
     sleep(rand(400, 1200))
       .then(() => fn(msg.action))
-      .then(sendResponse, (e) => sendResponse({ ok: false, reason: e.message }));
+      .then((r) => sendResponse(r && r.ok === false ? { ...r, probe: probe() } : r), (e) => sendResponse({ ok: false, reason: e.message, probe: probe() }));
     return true;
   });
 
