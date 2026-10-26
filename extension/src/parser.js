@@ -362,6 +362,52 @@
     return out;
   }
 
+  // A contract's prerequisites: "<a onclick="…Manual.open('building', 15)">
+  // Main Building</a> <span>Level 3</span>", with class "error" while not
+  // met; a building that rules this one out is struck through.
+  function buildingNeeds(c) {
+    const out = [];
+    for (const el of qsa(c, '.buildingCondition')) {
+      const a = qs(el, 'a');
+      const ref = a ? `${a.getAttribute('onclick') || ''} ${a.getAttribute('href') || ''}` : '';
+      const m = ref.match(/['"]building['"]\s*,\s*(\d+)/) || ref.match(/[?&]gid=(\d+)/);
+      if (!m) continue;
+      const lvl = qs(el, ':scope > span');
+      const struck = !!qs(el, '[style*="line-through"]');
+      out.push({ gid: Number(m[1]), level: lvl ? num(text(lvl)) || 0 : 0, met: !el.classList.contains('error'), ...(struck ? { not: true } : {}) });
+    }
+    return out;
+  }
+
+  // Academy and Smithy: one box per unit, with a green button when it can
+  // be researched (or improved) now, a timer while resources are short,
+  // and the unit's smithy level in its title. What is being researched
+  // now is in the table under it.
+  function parseResearch(doc) {
+    const boxes = qsa(doc, '#build .research, .build_details .research');
+    if (!boxes.length) return null;
+    const busy = qs(doc, '#build table.under_progress, #build .under_progress');
+    return {
+      busy: !!(busy && qs(busy, '.timer')),
+      busyEnds: busy && qs(busy, '.timer') ? num(qs(busy, '.timer').getAttribute('value')) : null,
+      units: boxes.map((box) => {
+        const img = qs(box, 'img.unit');
+        const btn = qs(box, '.cta button.green, button.green.build, button.green');
+        const timer = qs(box, '.errorMessage .timer, .cta .timer');
+        const lvl = qs(box, '.level, .title .level, .information .level');
+        const cost = qsa(qs(box, '.resourceWrapper, .costs'), '.resource .value, .inlineIcon.resource .value');
+        return {
+          unit: unitOf(img),
+          name: img ? img.getAttribute('alt') || '' : text(qs(box, '.title')),
+          level: lvl ? num(text(lvl)) : null,
+          can: !!(btn && !btn.disabled && !btn.classList.contains('disabled')),
+          waitSeconds: timer ? num(timer.getAttribute('value')) : null,
+          cost: cost.length >= 4 ? { wood: num(text(cost[0])), clay: num(text(cost[1])), iron: num(text(cost[2])), crop: num(text(cost[3])) } : null,
+        };
+      }).filter((u) => u.unit),
+    };
+  }
+
   // An empty building site lists what can go there, one contract per
   // building: a green "Construct" button, or a wait for resources, or
   // prerequisites still missing.
@@ -376,6 +422,7 @@
         canBuild: !!(button && !button.disabled && !button.classList.contains('disabled') && button.classList.contains('green')),
         secondsUntilResources: timer ? num(timer.getAttribute('value')) : null,
         missing: qsa(c, '.buildingCondition.error').map((x) => text(x)),
+        needs: buildingNeeds(c),
         cost: cost.length >= 4 ? { wood: num(text(cost[0])), clay: num(text(cost[1])), iron: num(text(cost[2])), crop: num(text(cost[3])) } : null,
       };
     }).filter((b) => b.gid);
@@ -515,6 +562,12 @@
     return out;
   }
 
+  // The Hospital (46) or, for Spartans, the Asclepeion (48); a building
+  // the game calls a hospital by name counts too.
+  const HOSPITAL_NAME = /hospital|asclep|مستشف|مشف|أسكليب|اسكليب|أسقليب|اسقليب/i;
+  const isHospital = (doc, gidMatch) => !!gidMatch && (['46', '48'].includes(gidMatch[1]) ||
+    (HOSPITAL_NAME.test(text(qs(doc, '.titleInHeader') || qs(doc, 'h1'))) && !!qs(doc, '.troop:not(.empty) .cta input.text[name^="t"]')));
+
   // build.php for an existing building / field / empty site.
   function parseBuildPage(doc, url) {
     const slot = num(url.searchParams.get('id'));
@@ -535,7 +588,7 @@
       newBuildings: qs(doc, '[id^="contract_building"]') ? parseNewBuildings(doc) : null,
       // Hospital: wounded troops, each with how many can be healed now
       // (its "max" link) and the count the game shows next to it.
-      hospital: qs(doc, '#build.gid46') ? qsa(doc, '.troop:not(.empty) .cta input.text[name^="t"]').map((input) => {
+      hospital: isHospital(doc, gidMatch) ? qsa(doc, '.troop:not(.empty) .cta input.text[name^="t"]').map((input) => {
         const box = input.closest('.troop');
         const img = qs(box, 'img.unit');
         const maxLink = qs(qs(box, '.cta'), 'a');
@@ -545,6 +598,8 @@
           max: maxLink ? num(text(maxLink)) || 0 : 0, count: info ? num(info[0]) : null,
         };
       }) : null,
+      // Academy (22) and Smithy (13): what can be researched or improved.
+      research: qs(doc, '#build.gid22, #build.gid13') ? parseResearch(doc) : null,
       // Town Hall: a celebration in progress shows a countdown.
       celebration: qs(doc, '#build.gid24') ? (() => {
         const timer = qs(doc, '#content table.under_progress .timer, #content .under_progress .timer, #build table .dur .timer');
@@ -639,7 +694,7 @@
   const api = {
     num, parsePage, parseResources, parseVillages, parseBuildQueue, parseFields, parseBuildings, parseMovements,
     parseBuildPage, parseFarmLists, parseHero, pageType, parseTroops, parseTrainingQueue, parseTile, parseSendPage,
-    oasesFromTiles, villagesFromTiles, valleysFromTiles, tileSummary, findTiles, shapeOf, unitOf, parseNewBuildings, parseQuests, parseInventory, parseReports, parseExpansion,
+    oasesFromTiles, villagesFromTiles, valleysFromTiles, tileSummary, findTiles, shapeOf, unitOf, parseNewBuildings, buildingNeeds, parseResearch, parseQuests, parseInventory, parseReports, parseExpansion,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TravianParser = api;

@@ -552,3 +552,4 @@ svg.chart .hit { fill: transparent; }
 /* Diagnostics report preview */
 .diag-text { max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px; line-height: 1.5;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0 0; text-align: left; }
+.pre { white-space: pre-line; }

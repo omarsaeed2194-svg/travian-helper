@@ -17,7 +17,7 @@ const BUILDING_NAMES = {
     34: "Stonemason's Lodge", 35: 'Brewery', 36: 'Trapper', 37: "Hero's Mansion",
     38: 'Great Warehouse', 39: 'Great Granary', 40: 'Wonder of the World',
     41: 'Horse Drinking Trough', 42: 'Stone Wall', 43: 'Makeshift Wall',
-    44: 'Command Center', 45: 'Waterworks', 46: 'Hospital',
+    44: 'Command Center', 45: 'Waterworks', 46: 'Hospital', 47: 'Defensive Wall', 48: 'Asclepeion',
   },
   ar: {
     1: 'الحطاب', 2: 'حفرة الطين', 3: 'منجم الحديد', 4: 'حقل القمح', 5: 'معمل النشارة',
@@ -30,9 +30,18 @@ const BUILDING_NAMES = {
     34: 'كوخ الحجّار', 35: 'المعصرة', 36: 'الصياد', 37: 'قصر الأبطال',
     38: 'المخزن الكبير', 39: 'مخزن الحبوب الكبير', 40: 'معجزة العالم',
     41: 'ساقية الخيول', 42: 'السور الحجري', 43: 'السور المؤقت',
-    44: 'مركز القيادة', 45: 'محطة المياه', 46: 'المستشفى',
+    44: 'مركز القيادة', 45: 'محطة المياه', 46: 'المستشفى', 47: 'السور الدفاعي', 48: 'الأسكليبيون (مستشفى)',
   },
 };
+
+// The Hospital, or the Spartans' Asclepeion: the village's building that
+// heals wounded troops (also when the game names it but uses another id).
+export const HOSPITAL_GIDS = [46, 48];
+const HOSPITAL_NAME = /hospital|asclep|مستشف|مشف|أسكليب|اسكليب|أسقليب|اسقليب/i;
+export const hospitalOf = (v) => ((v && v.buildings) || []).find((b) => b.gid && b.level > 0 && (HOSPITAL_GIDS.includes(b.gid) || HOSPITAL_NAME.test(b.name || ''))) || null;
+
+// A brain goal in words: "every field to 5" or "Barracks 3".
+export const goalText = (g) => (!g ? '—' : g.fields != null ? t('brain.goal.fields', { n: g.fields }) : t('brain.goal.building', { b: buildingName(g.gid), n: g.level }));
 
 // Buildings that train troops, in the order shown in the dashboard.
 export const TRAINING_BUILDINGS = [19, 20, 21, 29, 30, 25, 26];

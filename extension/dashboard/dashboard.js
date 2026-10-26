@@ -11,7 +11,7 @@ import { leaseIsFresh } from '../src/sync.js';
 import { webBase } from '../src/web.js';
 import { unitIcon, tribeBase } from '../src/units.js';
 import {
-  sortedVillages, taskLabel, buildingName, fmtDuration, fmtAgo, TRAINING_BUILDINGS, buildStatus,
+  sortedVillages, taskLabel, buildingName, fmtDuration, fmtAgo, TRAINING_BUILDINGS, buildStatus, hospitalOf,
 } from '../src/shared.js';
 import { t, applyI18n, coords, dateLocale, LANGUAGES } from '../src/i18n.js';
 
@@ -304,14 +304,14 @@ function renderTroops(now) {
 
 // Hospitals: wounded seen at the last look, healing in progress, next look.
 function renderHeal(now) {
-  const villages = sortedVillages(data.villages).filter((v) => (v.buildings || []).some((b) => b.gid === 46 && b.level > 0));
+  const villages = sortedVillages(data.villages).filter((v) => hospitalOf(v));
   if (!villages.length) { $('healTable').innerHTML = `<tr><td class="muted">${esc(t('heal.none'))}</td></tr>`; return; }
   const head = ['th.village', 'heal.th.wounded', 'heal.th.healing', 'heal.th.checked', 'heal.th.next'].map((k) => `<th>${esc(t(k))}</th>`).join('');
   const rows = villages.map((v) => {
     const wounded = !v.woundedAt ? `<span class="muted">${esc(t('heal.notSeen'))}</span>`
       : (v.wounded || []).length ? v.wounded.map((x) => `<span class="unit-chip">${unitIcon(x.unit)} ${esc(x.name || x.unit)} <b class="mono">${x.count ?? '?'}</b></span>`).join('')
         : `<span class="muted">${esc(t('heal.noneWounded'))}</span>`;
-    const q = ((v.trainingQueue || {})[46] || {}).items || [];
+    const q = ((v.trainingQueue || {})[hospitalOf(v).gid] || {}).items || [];
     const healing = q.filter((x) => !x.finishAt || x.finishAt > now);
     const inCare = healing.length ? healing.map((x) => `<span class="unit-chip">${unitIcon(x.unit)} ${x.count} × ${esc(x.name || x.unit)} <small class="mono muted">${x.finishAt ? fmtDuration(x.finishAt - now) : ''}</small></span>`).join('') : '—';
     const next = !data.settings.heal.enabled ? '—' : v.healAt && v.healAt > now ? fmtDuration(v.healAt - now) : automationOn(data.settings) ? t('troops.due') : t('troops.needsAuto');

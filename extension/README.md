@@ -67,7 +67,8 @@ you're away:
 - **Troops** — the troops in each village and what the barracks, stable and
   workshop are training (with finish times), in the Overview, the Troops &
   training page and the popup.
-- **Wounded troops** *(experimental)* — in villages with a Hospital, the
+- **Wounded troops** *(experimental)* — in villages with a Hospital (or the
+  Spartans' Asclepeion), the
   wounded are healed as far as the resources go (each kind up to the game's
   own "max"), every hour (you choose) and a few minutes after an attack
   ends. The Troops & training page shows the wounded, those being healed and
@@ -75,14 +76,24 @@ you're away:
 - **Brain** (page *Brain*) — runs every village by itself, free and inside
   the extension (nothing is sent anywhere). It gives each village a role
   (economy, or the army village: with three villages or more, the one making
-  the most crop), builds like the autopilot with field targets that grow
-  with the village (5 → 8 → 10; the capital 12), trains troops once the
-  stores fill up (defence in economy villages, attack units in the army
-  village, a share of what the stores pay for), and when an attack comes it
+  the most crop) and follows a clear build order for that role (fields and
+  buildings in turn: Main Building, storage, barracks, academy, smithy,
+  stable, wall…). A building it can't put up yet is no dead end: whatever
+  it needs is built first (and what that needs, in turn), with the
+  requirements read from the game's own empty-site pages, else from the
+  game's rules; a step the game refuses is passed over for the next one, and
+  an upgrade that costs more than the stores hold brings a bigger warehouse
+  or granary first. It researches the units the village's role needs in the
+  Academy and improves them in the Smithy *(experimental: not yet checked
+  against a saved Academy/Smithy page)*, trains troops in every training
+  building once the stores fill up (defence in economy villages; attack
+  units in the army village, which trains earlier and spends twice the
+  share), never more than the crop can feed, and when an attack comes it
   makes an escape plan that moves only the attack units and the hero, while
   the defence stays. Its limits: no gold, no attacks on players (farm lists
-  stay your own switch), at most a few trainings a round. Every decision and
-  its reason is on its page; you can set a village's role by hand.
+  stay your own switch), at most a few trainings and researches a round.
+  Every decision, the next building step and the goal it serves are on its
+  page; you can set a village's role by hand.
 - **Autopilot** — one switch for when you're away. When a village's build
   queue is empty it picks the next upgrade itself (warehouse/granary when
   90% full → crop when the village is short of crop → Main Building up to the

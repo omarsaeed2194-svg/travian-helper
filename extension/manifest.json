@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "مساعد ترافيان",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "description": "يراقب قراك في ترافيان ويرسل لك تنبيهات عند الهجمات وامتلاء المخازن، ويدير قائمة البناء وتدريب القوات وقوائم المزارع ومغامرات البطل أثناء غيابك.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA58srKwdWPGlcAI0UYseAeFzK208yVhOw4T/TQTrQa+wWVpt/3FnO00a2CpywknvtmEHoyDACVsbBEJzY9DE/X+NI1OZX3HbfMGy7dNGzZGx9WzGQqCSj2oClQXKIkNkojg5Cayq3eKYOB7A7ntQ+2Trm7GgA/HwtHed8r631rnwfLcVFBQcAUTofRnh6+s77hGhRp9hYgZQxHN9M+V+XRDsmNVCLULQ+oesUkM23aNs5hkhScJJkEpbpbw2tbThvcybsj2xZK92yEPiQcgWvW2aqRa8OjwLS6Y7w7qt8NC832YiXHFF0fue3l+h0TvrvPloxuco7jWrr4Kn9KM5/mQIDAQAB",
   "minimum_chrome_version": "116",

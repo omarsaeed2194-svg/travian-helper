@@ -3,8 +3,8 @@
 // data the background uses (src/brain.js), so it always shows the current
 // thinking.
 import { command, esc, editingIn } from '../src/ui.js';
-import { brainPlan, BARRACKS, STABLE } from '../src/brain.js';
-import { buildingName, fmtDuration, fmtAgo, buildStatus } from '../src/shared.js';
+import { brainPlan } from '../src/brain.js';
+import { buildingName, fmtDuration, fmtAgo, buildStatus, goalText } from '../src/shared.js';
 import { tribeBase } from '../src/units.js';
 import { t, coords } from '../src/i18n.js';
 
@@ -20,18 +20,48 @@ function decision(p, now) {
     return t(`brain.skip.${(tr && tr.skip) || 'noStock'}`, { pct });
   }
   const when = (p.v.brainTrainAt || 0) > now ? t('brain.dec.next', { t: fmtDuration(p.v.brainTrainAt - now) }) : t('brain.dec.now');
-  return t('brain.dec.train', { kind: t(`brain.kind.${tr.kind}`), b: buildingName(tr.gid === STABLE ? STABLE : BARRACKS), pct: Math.round(tr.share * 100), why: t(`brain.why.${tr.why}`), when });
+  const list = (tr.builds || [{ gid: tr.gid }]).map((b) => buildingName(b.gid)).join(t('list.sep'));
+  return t('brain.dec.trainIn', { kind: t(`brain.kind.${tr.kind}`), list, pct: Math.round(tr.share * 100), why: t(`brain.why.${tr.why}`), when });
+}
+
+// The next building step and the goal it serves, and the goals passed over.
+function nextStep(p) {
+  const b = p.build;
+  if (!b) return t('brain.dec.off');
+  const passed = (b.passed || []).filter((x) => x.reason !== 'building').slice(0, 3)
+    .map((x) => `${goalText(x.goal)} (${t(`brain.wait.${x.reason}`)})`).join(t('list.sep'));
+  let text = t('brain.next.none');
+  if (b.step) {
+    const step = t('brain.next.step', { b: buildingName(b.step.gid), n: b.step.level + 1 });
+    text = b.step.forGid ? t('brain.next.needed', { step, b: buildingName(b.step.forGid), n: b.step.forLevel }) : t('brain.next.goal', { step, g: goalText(b.goal) });
+  }
+  return passed ? `${text}\n${t('brain.next.passed', { list: passed })}` : text;
+}
+
+// Academy and Smithy: what the brain will research or improve.
+function army(p) {
+  if (p.role === 'off') return '—';
+  const out = [];
+  for (const r of p.research || []) {
+    const b = buildingName(r.gid);
+    if (r.skip === 'noBuilding' || r.skip === 'roleOff') continue;
+    if (((p.v.research || {})[r.gid] || {}).unreadable) out.push(t('brain.res.unreadable', { b }));
+    else if (r.look) out.push(t('brain.res.look', { b }));
+    else if (r.field) out.push(t('brain.res.do', { b, u: r.name || r.field }));
+    else if (['busy', 'saving', 'nothing', 'economyFirst'].includes(r.skip)) out.push(t(`brain.res.skip.${r.skip}`, { b }));
+  }
+  return out.join('\n') || '—';
 }
 
 function renderTable(now) {
   const plan = brainPlan(data, data.settings, now, tribeBase(data.villages));
-  const head = ['th.village', 'brain.th.role', 'brain.th.stage', 'brain.th.fields', 'brain.th.build', 'brain.th.troops', 'brain.th.defense', 'brain.th.last']
+  const head = ['th.village', 'brain.th.role', 'brain.th.stage', 'brain.th.next', 'brain.th.build', 'brain.th.troops', 'brain.th.army', 'brain.th.defense', 'brain.th.last']
     .map((k) => `<th>${esc(t(k))}</th>`).join('');
   const roles = data.settings.brain.roles || {};
   const rows = plan.map((p) => {
     const v = p.v;
     const st = buildStatus(v, { ...data, tasks: data.tasks || {} }, now);
-    const last = v.brainLast ? `${esc(t('brain.lastTrained', { n: v.brainLast.n, u: v.brainLast.unit }))} <small class="muted">${esc(fmtAgo(v.brainLast.at, now))}</small>` : '<span class="muted">—</span>';
+    const last = v.brainLast ? `${esc(v.brainLast.list ? v.brainLast.unit : t('brain.lastTrained', { n: v.brainLast.n, u: v.brainLast.unit }))} <small class="muted">${esc(fmtAgo(v.brainLast.at, now))}</small>` : '<span class="muted">—</span>';
     const def = !data.settings.brain.defense ? t('brain.def.off')
       : (data.escapes || []).some((x) => x.villageId === v.id) ? t('brain.def.plan')
         : v.underAttack ? t('brain.def.nothing') : t('brain.def.ready');
@@ -39,9 +69,10 @@ function renderTable(now) {
       <td>${v.underAttack ? '⚔ ' : ''}${esc(v.name)}<br><small class="muted">${coords(v.x, v.y)}</small></td>
       <td><select data-brain-role="${esc(v.id)}">${ROLES.map((r) => `<option value="${r}" ${(roles[v.id] || 'auto') === r ? 'selected' : ''}>${esc(r === 'auto' ? t('brain.role.autoIs', { role: t(`brain.role.${p.role}`) }) : t(`brain.role.${r}`))}</option>`).join('')}</select></td>
       <td>${esc(t(`brain.stage.${p.stage}`))}</td>
-      <td class="mono">${p.role === 'off' ? '—' : p.fieldsMax}</td>
+      <td class="small pre">${esc(nextStep(p))}</td>
       <td class="small">${esc(p.role === 'off' ? t('brain.dec.off') : st ? st.text : '—')}</td>
       <td class="small">${esc(decision(p, now))}</td>
+      <td class="small pre">${esc(army(p))}</td>
       <td class="small">${esc(def)}</td>
       <td class="small">${last}</td>
     </tr>`;

@@ -3,15 +3,16 @@
 import {
   RESOURCES, resLabel, FIELD_RESOURCE, mergeSettings, capacityFor,
   estimateStock, fmtDuration, fmtClock, withinActiveHours, sortedVillages, taskLabel, buildingName,
-  buildBlock, fmtNum,
+  buildBlock, fmtNum, hospitalOf, goalText,
 } from './shared.js';
-import { pickAutoUpgrade, troopsHome, raidTargets, oasisKey, farmTargets, coversTroops, cleanTroops, buildCategory, bagShortfall, distance, MAP_EDGE } from './autopilot.js';
+import { pickAutoUpgrade, unitField, troopsHome, raidTargets, oasisKey, farmTargets, coversTroops, cleanTroops, buildCategory, bagShortfall, distance, MAP_EDGE } from './autopilot.js';
 import { tribeBase } from './units.js';
 import { recordMapVillages } from './inactive.js';
 import { applyReports } from './reports.js';
 import { savingFor, canAfford, CELEBRATIONS } from './culture.js';
 import { expansionPlan, settlerHome, foundedNow, SETTLERS } from './expansion.js';
-import { brainPlan, fieldTarget, defensePlan, unitPrefs, isOffensive } from './brain.js';
+import { brainPlan, fieldTarget, defensePlan, unitPrefs, isOffensive, villageRole, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
+import { learnReqs } from './buildplan.js';
 import { SNAPSHOT_KEYS, webBase, snapshotOf, hashOf, cleanRemote } from './web.js';
 import { firstAttack, escapeTiming, escapeDone, escapeDue, escapeTarget, escapeTroops, TOO_LATE_MS, donateTiming, donateDone, donateDue, donationAmounts, amountsText, sameAttack } from './escape.js';
 import { parseCommand, statusText, summaryText, helpText } from './telegram.js';
@@ -24,7 +25,6 @@ const LOG_LIMIT = 300;
 const PAGE_TIMEOUT_MS = 45000;
 const BUILDINGS_RESCAN_MS = 3 * 3600 * 1000;
 const STORAGE_REALERT_MS = 6 * 3600 * 1000;
-const HOSPITAL = 46;
 const MAX_BUILD_ATTEMPTS = 6;
 const HISTORY_STEP_MS = 5 * 60 * 1000;
 const HISTORY_KEEP_MS = 24 * 3600 * 1000;
@@ -203,7 +203,7 @@ async function processPage(state, tabId) {
       if (!vi.underAttack && wasAttacked) {
         events.push(['info', t('log.attackOver', { v: vi.name }), vi.id]);
         // The battle may have left wounded: look at the Hospital soon.
-        if ((v.buildings || []).some((b) => b.gid === HOSPITAL && b.level > 0)) v.healAt = Math.min(v.healAt || Infinity, Date.now() + 3 * 60000);
+        if (hospitalOf(v)) v.healAt = Math.min(v.healAt || Infinity, Date.now() + 3 * 60000);
       }
       if (!vi.underAttack) v.incomingAttacks = 0;
     });
@@ -251,6 +251,18 @@ async function processPage(state, tabId) {
         const slotBuilding = (v.buildings || []).find((b) => b.slot === bp.slot);
         const gid = bp.gid || Number(new URL(state.url).searchParams.get('gid')) || (slotBuilding && slotBuilding.gid);
         if (bp.hospital) { v.wounded = bp.hospital.map(({ unit, name, count, max }) => ({ unit, name, count, max })); v.woundedAt = now; }
+        // An empty site lists what each building needs: the brain plans with it.
+        if (bp.newBuildings && bp.newBuildings.some((c) => c.needs && c.needs.length)) {
+          d.account = d.account || {};
+          d.account.buildReqs = learnReqs(d.account.buildReqs, bp.newBuildings, now);
+        }
+        // Academy and Smithy: what can be researched or improved, and what is under way.
+        if (bp.research && (gid === ACADEMY || gid === SMITHY)) {
+          v.research = { ...(v.research || {}), [gid]: {
+            at: now, busyUntil: bp.research.busy ? now + (bp.research.busyEnds || 600) * 1000 : 0,
+            units: bp.research.units.map((u) => ({ ...u, field: unitField(u.unit) })),
+          } };
+        }
         if (gid && bp.trainable && bp.trainable.length) v.units = { ...(v.units || {}), [gid]: bp.trainable.map(({ field, unit, name }) => ({ field, unit, name })) };
         if (gid && bp.trainingQueue) {
           const items = bp.trainingQueue.map((q) => ({ unit: q.unit, name: q.name, count: q.count, finishAt: q.secondsLeft != null ? now + q.secondsLeft * 1000 : null }));
@@ -779,6 +791,11 @@ async function refreshVillages(tabId, job, s) {
   }
 }
 
+// Why the brain builds a step: the building that needs it, or its goal.
+const brainWhy = (p) => (p.why === 'needed'
+  ? t('brain.needFor', { b: buildingName(p.forGid), n: p.forLevel })
+  : t('brain.forGoal', { g: goalText(p.goal) }));
+
 const JOBS = {
   // Move the village's troops out before the attack lands.
   async escape(tabId, job, s) {
@@ -945,9 +962,13 @@ const JOBS = {
       villages = fresh.villages || {};
       v = villages[vid];
       const plan = s.expansion.enabled ? expansionPlan({ ...fresh, settings: s }, Date.now()) : null;
-      // With the brain on, the fields go as high as this village is ready for.
+      // With the brain on, its build order for the village's role decides
+      // (prerequisites first), and the fields go as high as the village is ready for.
       const sv = s.brain.enabled ? { ...s, autopilot: { ...s.autopilot, construct: true, fieldsMax: fieldTarget(v) } } : s;
-      const pick = pickAutoUpgrade(v, sv, Date.now(), tribeBase(villages), plan);
+      const base = tribeBase(villages);
+      const role = s.brain.enabled ? villageRole(v, sortedVillages(villages), s) : null;
+      const brain = s.brain.enabled ? brainBuilder(role, base, (fresh.account || {}).buildReqs || {}) : null;
+      const pick = pickAutoUpgrade(v, sv, Date.now(), base, plan, brain);
       if (!pick) {
         await patchVillage(vid, { autoIdleUntil: Date.now() + AUTO_IDLE_MS });
         await log('info', t('log.autoNothing', { n: sv.autopilot.fieldsMax }), vid);
@@ -961,7 +982,7 @@ const JOBS = {
         return;
       }
       why = pick.why;
-      task = { kind: 'upgrade', slot: pick.slot, targetLevel: pick.level + 1, auto: true, gid: pick.construct ? pick.gid : undefined };
+      task = { kind: 'upgrade', slot: pick.slot, targetLevel: pick.level + 1, auto: true, gid: pick.construct ? pick.gid : undefined, brain: pick.why === 'goal' || pick.why === 'needed' ? pick : null };
     }
     if (!task) return;
     // Player tasks leave the queue when done; autopilot picks were never in it.
@@ -1025,6 +1046,16 @@ const JOBS = {
       bp.maxLevel = false;
       bp.nextLevel = 1;
       if (contract.missing.length) bp.blockedReason = t('reason.needs', { list: contract.missing.join(t('list.sep')) });
+      // The game wants other buildings first. Its list is stored now (see
+      // processPage), so the brain's next pick builds them; skip this one
+      // only when the village already seems to have them (stale levels).
+      const open = (contract.needs || []).filter((n) => !n.met && !n.not);
+      if (task.brain && !contract.canBuild && open.length) {
+        const lv = (g) => Math.max(0, ...[...(v.fields || []), ...(v.buildings || [])].filter((b) => b.gid === g).map((b) => b.level || 0));
+        if (open.every((n) => lv(n.gid) >= (n.level || 1))) await skipSlot(AUTO_SKIP_MS);
+        await log('info', t('log.brainNeedsFirst', { name: title, list: contract.missing.join(t('list.sep')) }), vid);
+        return;
+      }
     }
 
     // Autopilot picks just want one more level, whatever the page says now.
@@ -1040,6 +1071,15 @@ const JOBS = {
       return;
     }
     if (!bp.canUpgrade) {
+      // It costs more than the stores hold: a bigger warehouse or granary
+      // comes first (pickAutoUpgrade), then this one again.
+      const short = task.auto && bp.cost && v.resources && RESOURCES.find((k) => (bp.cost[k] || 0) > (capacityFor(v.resources, k) || Infinity));
+      if (short) {
+        await patchVillage(vid, { storeShort: { res: short, need: bp.cost[short], at: now, until: now + 12 * 3600000 }, buildWait: null });
+        await skipSlot(AUTO_SKIP_MS);
+        await log('info', t('log.storeShort', { name: title, store: buildingName(short === 'crop' ? 11 : 10) }), vid);
+        return;
+      }
       if (bp.secondsUntilResources) {
         // Not enough resources: the game says when there will be. Retry
         // then, or sooner if a later snapshot shows the cost is covered.
@@ -1091,7 +1131,8 @@ const JOBS = {
     }
     // Title reads "<name> Level N" in the server's language; drop the level part.
     const name = (bp.title || '').replace(/\s*\S*\s*\d+\s*$/, '') || title;
-    if (contract) await log('success', t(task.auto ? 'log.autoConstructing' : 'log.constructing', { name: buildingName(contract.gid), slot }), vid);
+    if (task.brain) await log('success', t('log.brainBuild', { name: contract ? buildingName(contract.gid) : name, n: contract ? 1 : bp.nextLevel ?? '?', why: brainWhy(task.brain) }), vid);
+    else if (contract) await log('success', t(task.auto ? 'log.autoConstructing' : 'log.constructing', { name: buildingName(contract.gid), slot }), vid);
     else if (task.auto) await log('success', t('log.autoUpgrading', { name, n: bp.nextLevel ?? '?', why: t(`auto.why.${why}`) }), vid);
     else await log('success', t('log.upgrading', { name, n: bp.nextLevel ?? '?' }), vid);
     await bump('upgrades');
@@ -1121,33 +1162,87 @@ const JOBS = {
     }
   },
 
-  // The brain's troops: a share of what the stores pay for, of the unit
-  // the village's role calls for (defence or attack), in barracks or stable.
+  // The brain's troops: in each training building the plan names, a share
+  // of what the stores pay for, of the units the village's role calls for
+  // (defence or attack), never more than the crop can feed.
   async brainTrain(tabId, job, s) {
     const vid = job.villageId;
     await patchVillage(vid, { brainTrainAt: Date.now() + jittered(s.brain.everyMinutes * 60000, s.jitterPercent) });
-    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=${job.gid}`);
-    const list = (page.buildPage && page.buildPage.trainable) || [];
     const { villages = {} } = await read(['villages']);
     if (!villages[vid]) return;
-    const bname = buildingName(job.gid);
-    // What this building trains is known now: the role's units first; for
-    // defence never an attack unit, and never chiefs or settlers.
     const base = tribeBase(villages);
-    const prefs = unitPrefs(base, job.kind, job.gid);
-    const fits = (u) => u.field !== 't9' && u.field !== 't10' && (job.kind === 'off' || !isOffensive(u.field, base));
-    const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean), ...list.filter((u) => !prefs.includes(u.field) && fits(u))];
-    const unit = order.find((u) => u.max > 0);
-    if (!unit) {
-      await log('info', t(list.length ? 'log.brainNoRes' : 'log.brainNoUnit', { b: bname }), vid);
+    let crop = job.crop;
+    const done = [];
+    for (const [k, b] of (job.builds || [{ gid: job.gid }]).entries()) {
+      if (k) await sleep(rand(1500, 3500));
+      const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=${b.gid}`);
+      const list = (page.buildPage && page.buildPage.trainable) || [];
+      const bname = buildingName(b.gid);
+      // What this building trains is known now: the role's units first; for
+      // defence never an attack unit, and never chiefs or settlers.
+      const prefs = unitPrefs(base, job.kind, b.gid);
+      const fits = (u) => u.field !== 't9' && u.field !== 't10' && (job.kind === 'off' || !isOffensive(u.field, base));
+      const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean), ...list.filter((u) => !prefs.includes(u.field) && fits(u))];
+      const unit = order.find((u) => u.max > 0);
+      if (!unit) {
+        await log('info', t(list.length ? 'log.brainNoRes' : 'log.brainNoUnit', { b: bname }), vid);
+        continue;
+      }
+      let amount = Math.max(1, Math.floor(unit.max * job.share));
+      // Troops eat crop: keep the village's crop above zero.
+      if (crop != null) {
+        const each = upkeepOf(unit.field, base);
+        amount = Math.min(amount, Math.floor(crop / each));
+        if (amount < 1) { await log('info', t('log.brainCropLow', { b: bname }), vid); break; }
+        crop -= amount * each;
+      }
+      const { res } = await act(tabId, { kind: 'train', field: unit.field, amount }, true);
+      if (!res.ok) throw new Error(reasonText(res));
+      await log('success', t('log.brainTrained', { n: amount, u: unit.name || unit.field, b: bname, why: t(`brain.why.${job.why}`) }), vid);
+      await bump('trained', amount);
+      done.push({ n: amount, unit: unit.name || unit.field, gid: b.gid });
+    }
+    if (done.length) {
+      await patchVillage(vid, { brainLast: { at: Date.now(), n: done.reduce((n, x) => n + x.n, 0), unit: done.map((x) => `${x.n} × ${x.unit}`).join(t('list.sep')), gid: done[0].gid, why: job.why, list: done } });
+    }
+  },
+
+  // The brain develops the army: a unit researched in the Academy, or one
+  // improved in the Smithy, chosen for the village's role.
+  async brainResearch(tabId, job, s) {
+    const vid = job.villageId;
+    const gid = job.gid;
+    const later = (h) => update(['villages'], (d) => {
+      const v = d.villages && d.villages[vid];
+      if (v) v.researchAt = { ...(v.researchAt || {}), [gid]: Date.now() + jittered(h * 3600000, s.jitterPercent) };
+    });
+    await later(1);
+    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=${gid}`);
+    const bname = buildingName(gid);
+    if (!page.buildPage || !page.buildPage.research) {
+      // The page didn't show what we expect: note it, look again much later.
+      await update(['villages'], (d) => {
+        const v = d.villages && d.villages[vid];
+        if (v) v.research = { ...(v.research || {}), [gid]: { at: Date.now(), units: [], unreadable: true } };
+      });
+      await later(12);
+      await log('info', t('log.brainResearchUnread', { b: bname }), vid);
       return;
     }
-    const amount = Math.max(1, Math.floor(unit.max * job.share));
-    const { res } = await act(tabId, { kind: 'train', field: unit.field, amount }, true);
+    const { villages = {} } = await read(['villages']);
+    const v = villages[vid];
+    if (!v) return;
+    const role = villageRole(v, sortedVillages(villages), s);
+    const pick = researchPick(v, role, tribeBase(villages), gid, Date.now());
+    if (!pick.field) {
+      if (pick.skip === 'nothing') await later(6);
+      return;
+    }
+    const { res } = await act(tabId, { kind: 'research', unit: pick.unit }, true);
     if (!res.ok) throw new Error(reasonText(res));
-    await log('success', t('log.brainTrained', { n: amount, u: unit.name || unit.field, b: bname, why: t(`brain.why.${job.why}`) }), vid);
-    await bump('trained', amount);
-    await patchVillage(vid, { brainLast: { at: Date.now(), n: amount, unit: unit.name || unit.field, gid: job.gid, why: job.why } });
+    await log('success', t(gid === SMITHY ? 'log.brainImproved' : 'log.brainResearched', { u: pick.name || pick.field, n: (pick.level || 0) + 1, b: bname }), vid);
+    await bump('researched');
+    await later(0.5);
   },
 
   // Hospital: heal every wounded unit the resources pay for.
@@ -1156,7 +1251,10 @@ const JOBS = {
     const v = villages[job.villageId];
     if (!v) return;
     await patchVillage(v.id, { healAt: Date.now() + jittered(s.heal.everyMinutes * 60000, s.jitterPercent) });
-    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(v.id)}&gid=${HOSPITAL}`);
+    // The Hospital, or the Spartans' Asclepeion: opened by its site.
+    const h = hospitalOf(v);
+    if (!h) return;
+    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(v.id)}&id=${h.slot}&gid=${h.gid}`);
     const list = (page.buildPage && page.buildPage.hospital) || null;
     if (!list) throw new Error(t('err.noHospital'));
     await patchVillage(v.id, { wounded: list.map(({ unit, name, count, max }) => ({ unit, name, count, max })), woundedAt: Date.now() });
@@ -1767,7 +1865,7 @@ function planAutomation(s, data, now, jobs) {
   // Wounded troops: a look at each Hospital every so often (and soon after an attack).
   if (s.heal.enabled) {
     for (const v of sortedVillages(villages)) {
-      if (!(v.buildings || []).some((b) => b.gid === HOSPITAL && b.level > 0) || now < (v.healAt || 0)) continue;
+      if (!hospitalOf(v) || now < (v.healAt || 0)) continue;
       jobs.push({ type: 'heal', villageId: v.id, label: t('job.heal', { v: v.name }) });
     }
   }
@@ -1781,10 +1879,19 @@ function planAutomation(s, data, now, jobs) {
   // The brain's troops: a few villages a round, each every so often.
   if (s.brain.enabled) {
     let n = 0;
-    for (const p of brainPlan({ ...data, settings: s }, s, now, tribeBase(villages))) {
+    const thinking = brainPlan({ ...data, settings: s }, s, now, tribeBase(villages));
+    for (const p of thinking) {
       if (n >= s.brain.maxActions) break;
       if (!p.train || p.train.skip || (p.v.brainTrainAt || 0) > now) continue;
-      jobs.push({ type: 'brainTrain', villageId: p.id, gid: p.train.gid, kind: p.train.kind, share: p.train.share, why: p.train.why, label: t('job.brainTrain', { v: p.v.name }) });
+      jobs.push({ type: 'brainTrain', villageId: p.id, builds: p.train.builds, gid: p.train.gid, kind: p.train.kind, share: p.train.share, why: p.train.why, crop: p.train.crop, label: t('job.brainTrain', { v: p.v.name }) });
+      n += 1;
+    }
+    // Army development: one Academy or Smithy visit per village when due.
+    for (const p of thinking) {
+      if (n >= s.brain.maxActions) break;
+      const r = p.research.find((x) => (x.field || x.look) && !(((p.v.researchAt || {})[x.gid] || 0) > now));
+      if (!r) continue;
+      jobs.push({ type: 'brainResearch', villageId: p.id, gid: r.gid, label: t('job.brainResearch', { v: p.v.name, b: buildingName(r.gid) }) });
       n += 1;
     }
   }

@@ -255,6 +255,19 @@
       return { ok: true, navigating: true, sent, total };
     },
 
+    // Academy / Smithy: the green button in the box of this unit.
+    async research({ unit }) {
+      if (!/^u\d+$/.test(String(unit || ''))) return { ok: false, code: 'badUnit' };
+      const box = Array.from(document.querySelectorAll('#build .research, .build_details .research'))
+        .find((b) => b.querySelector(`img.unit.${unit}`));
+      if (!box) return { ok: false, code: 'noResearch' };
+      const btn = box.querySelector('.cta button.green, button.green.build, button.green');
+      if (!usable(btn)) return { ok: false, code: 'noResearchButton' };
+      await sleep(rand(300, 800));
+      setTimeout(() => btn.click(), 50);
+      return { ok: true, navigating: true };
+    },
+
     async train({ field, amount }) {
       if (!/^t\d+$/.test(field)) return { ok: false, code: 'badField' };
       const input = document.querySelector(`.troop:not(.empty) .cta input.text[name="${field}"]`);

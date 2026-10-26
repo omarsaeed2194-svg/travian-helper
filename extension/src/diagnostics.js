@@ -3,6 +3,8 @@
 // read in detail, the last failed actions with what their page looked like,
 // and recent errors. No passwords, tokens or keys. Pure.
 import { sortedVillages } from './shared.js';
+import { brainPlan } from './brain.js';
+import { tribeBase } from './units.js';
 
 const ago = (at, now) => {
   if (!at) return '—';
@@ -50,6 +52,21 @@ export function diagnosticsReport(data, env, now = Date.now()) {
     add(`- ${v.name} (${v.x}|${v.y}) #${v.id}: fields ${ago(v.fieldsAt, now)}, buildings ${ago(v.buildingsAt, now)}, troops ${ago(v.troopsAt, now)},`
       + ` stock ${ago(v.resourcesAt, now)} · builds ${(v.buildQueue || []).length} · training ${q}`
       + `${v.underAttack ? ' · UNDER ATTACK' : ''}${v.buildWait ? ` · build waits: ${v.buildWait.reason}` : ''}${v.autoSkip && v.autoSkip.until > now ? ` · skipping ${JSON.stringify(v.autoSkip.slots || [])}/${JSON.stringify(v.autoSkip.gids || [])}` : ''}`);
+  }
+
+  if (s.brain && s.brain.enabled) {
+    add();
+    const base = tribeBase(data.villages || {});
+    add(`Brain (tribe ${base ?? '?'}, requirements read from the game for ${Object.keys(acc.buildReqs || {}).length} buildings):`);
+    const g = (x) => (!x ? '—' : x.fields != null ? `fields ${x.fields}` : `g${x.gid} ${x.level}`);
+    for (const p of brainPlan(data, s, now, base)) {
+      const b = p.build;
+      const step = b && b.step ? `g${b.step.gid}@${b.step.slot} → ${b.step.level + 1}${b.step.forGid ? ` for g${b.step.forGid} ${b.step.forLevel}` : ''} (goal ${g(b.goal)})` : 'nothing';
+      const passed = b && b.passed.length ? ` · passed ${b.passed.slice(0, 4).map((x) => `${g(x.goal)}:${x.reason}`).join(', ')}` : '';
+      const tr = p.train.skip ? p.train.skip : `${p.train.kind} in ${(p.train.builds || []).map((x) => `g${x.gid}`).join('+')} ${Math.round(p.train.share * 100)}%`;
+      const rs = p.research.map((r) => `g${r.gid} ${r.field || (r.look ? 'look' : r.skip)}`).join(', ');
+      add(`- ${p.v.name}: ${p.role}/${p.stage} · build ${step}${passed} · troops ${tr} · research ${rs}`);
+    }
   }
 
   add();

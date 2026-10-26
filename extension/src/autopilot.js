@@ -36,7 +36,7 @@ export const oasisKey = (x, y) => `${x}|${y}`;
 const lowest = (list) => list.slice().sort((a, b) => a.level - b.level)[0] || null;
 
 // Building categories on an empty site's page (build.php?id=N&category=C).
-const MILITARY = new Set([12, 13, 14, 19, 20, 21, 22, 29, 30, 36, 37, 41, 46]);
+const MILITARY = new Set([12, 13, 14, 19, 20, 21, 22, 29, 30, 36, 37, 41, 46, 48]);
 const RESOURCE_BUILDINGS = new Set([5, 6, 7, 8, 9]);
 export const buildCategory = (gid) => (RESOURCE_BUILDINGS.has(gid) ? 3 : MILITARY.has(gid) ? 2 : 1);
 
@@ -86,8 +86,9 @@ export function pickConstruct(v, tribeBase = null, skip = [], now = Date.now(), 
 // for a celebration, missing basic buildings, (culture focus) the most
 // culture points per resource, the Main Building when it lags behind the
 // fields, then the lowest resource field (favouring the resource produced
-// least).
-export function pickAutoUpgrade(v, s, now = Date.now(), tribeBase = null, plan = null) {
+// least). With the brain on, its build order (src/buildplan.js, passed in
+// as `brain`) replaces everything after the celebration.
+export function pickAutoUpgrade(v, s, now = Date.now(), tribeBase = null, plan = null, brain = null) {
   const ap = s.autopilot;
   const skip = v.autoSkip && v.autoSkip.until > now ? v.autoSkip.slots || [] : [];
   const free = (b) => b && !b.underConstruction && !b.maxLevel && !skip.includes(b.slot);
@@ -104,6 +105,17 @@ export function pickAutoUpgrade(v, s, now = Date.now(), tribeBase = null, plan =
       const store = lowest(buildings.filter((b) => b.gid === (k === 'crop' ? 11 : 10) && b.level < 20));
       if (store) return { slot: store.slot, gid: store.gid, level: store.level, why: 'storage', res: k };
     }
+  }
+
+  // 1b. The last upgrade tried cost more than the stores hold: a bigger
+  // store first (or a first one).
+  const short = v.storeShort && v.storeShort.until > now ? v.storeShort : null;
+  if (short && (capacityFor(v.resources, short.res) || 0) < short.need) {
+    const gid = short.res === 'crop' ? 11 : 10;
+    const store = lowest(buildings.filter((b) => b.gid === gid && b.level < 20));
+    if (store) return { slot: store.slot, gid, level: store.level, why: 'storeShort', res: short.res };
+    const site = (v.buildings || []).filter((b) => !b.gid && b.slot >= 19 && b.slot <= 38 && !skip.includes(b.slot)).sort((a, b) => a.slot - b.slot)[0];
+    if (site && !(v.buildings || []).some((b) => b.gid === gid && (b.underConstruction || b.level < 20))) return { slot: site.slot, gid, level: 0, why: 'storeShort', res: short.res, construct: true };
   }
 
   const below = (f) => f.level < ap.fieldsMax;
@@ -132,6 +144,13 @@ export function pickAutoUpgrade(v, s, now = Date.now(), tribeBase = null, plan =
     } else if (save) {
       return { saving: true, why: 'saving', kind: save.kind };
     }
+  }
+
+  // The brain's build order: the next step towards its first open goal,
+  // prerequisites first.
+  if (brain) {
+    const b = brain(v, skip, skipGids);
+    if (b) return b;
   }
 
   // 4. A building the village still lacks (warehouse, rally point…).
