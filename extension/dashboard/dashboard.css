@@ -553,3 +553,10 @@ svg.chart .hit { fill: transparent; }
 .diag-text { max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px; line-height: 1.5;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0 0; text-align: left; }
 .pre { white-space: pre-line; }
+/* Simple mode: the pages the brain's player needs, its key switches on the brain page. */
+.simple-only { display: none; }
+body.simple .simple-only { display: block; }
+body.simple .tabs a[data-tab]:not([data-simple]), body.simple .related a:not([data-simple]) { display: none; }
+body.simple .tabs .nav-group:not(:has(a[data-simple])) { display: none; }
+.quick { border: 1px solid var(--line, #8884); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.quick h3 { margin: 0 0 4px; font-size: 14px; }

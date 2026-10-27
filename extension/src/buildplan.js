@@ -6,9 +6,12 @@
 // a level that is being built, no free site, ruled out by another
 // building) is passed over for the next one, so a village never stalls
 // behind one building. Prerequisites come from the game's own pages once
-// it has shown them (account.buildReqs), else from the rules below. Pure.
-import { FIELD_RESOURCE } from './shared.js';
+// it has shown them (account.buildReqs), else from the rules below. Among
+// fields of the same level, the resource the next buildings need most (in
+// hours of production) goes up first. Pure.
+import { FIELD_RESOURCE, RESOURCES } from './shared.js';
 import { wallGid } from './autopilot.js';
+import { costOf } from './culture.js';
 
 // What each building needs first: { gid: level }. 1–4 are resource fields
 // (one field of that kind at the level).
@@ -112,13 +115,24 @@ export function nextBuild(v, { role = 'economy', base = null, learned = {}, skip
     return site ? site.slot : null;
   };
   const special = (gid) => (gid === RALLY ? 39 : gid === wallGid(base) ? 40 : null);
+  const list = goals || goalsFor(role, v, base);
+  const met = (g) => (g.fields != null ? fields.length > 0 && fields.every((f) => f.level >= g.fields || f.maxLevel) : done(g.gid) >= g.level);
+  // What the next buildings in the plan cost, in hours of what the village
+  // makes: among fields of the same level, the resource furthest behind
+  // goes up first.
+  const behind = {};
+  for (const g of list.filter((x) => x.gid && !met(x)).slice(0, 3)) {
+    const c = costOf(g.gid, done(g.gid) + 1) || {};
+    for (const k of RESOURCES) behind[k] = (behind[k] || 0) + (c[k] || 0) / Math.max(1, prod[k] || 0);
+  }
+  const lag = (gid) => behind[FIELD_RESOURCE[gid]] || 0;
 
   // A step to reach `target`, or { wait } with the reason it can't move now.
   const resolve = (target, depth, chain) => {
     if (depth > 6) return { wait: 'deep' };
     if (target.fields != null) {
       const low = fields.filter((f) => f.level < target.fields);
-      const pick = low.filter(usable).sort((a, b) => a.level - b.level ||
+      const pick = low.filter(usable).sort((a, b) => a.level - b.level || lag(b.gid) - lag(a.gid) ||
         (prod[FIELD_RESOURCE[a.gid]] || 0) - (prod[FIELD_RESOURCE[b.gid]] || 0) || a.slot - b.slot)[0];
       return pick ? { step: { slot: pick.slot, gid: pick.gid, level: pick.level } } : { wait: low.length ? 'building' : 'done' };
     }
@@ -160,9 +174,8 @@ export function nextBuild(v, { role = 'economy', base = null, learned = {}, skip
     return slot ? { step: { slot, gid, level: 0, construct: true } } : { wait: 'noSite' };
   };
 
-  const met = (g) => (g.fields != null ? fields.length > 0 && fields.every((f) => f.level >= g.fields || f.maxLevel) : done(g.gid) >= g.level);
   const passed = [];
-  for (const goal of goals || goalsFor(role, v, base)) {
+  for (const goal of list) {
     if (met(goal)) continue;
     const r = resolve(goal, 0, []);
     if (r.step) {

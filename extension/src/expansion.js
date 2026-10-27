@@ -48,8 +48,25 @@ export function targetFor(v, data, taken = new Set()) {
     return { x, y, own: true };
   }
   if (v.x == null) return null;
-  const list = Object.values(data.valleys || {}).filter((x) => free(`${x.x}|${x.y}`)).map((x) => ({ ...x, d: distance(x, v) })).sort((a, b) => a.d - b.d);
+  const list = Object.values(data.valleys || {}).filter((x) => free(`${x.x}|${x.y}`)).map((x) => siteScore(x, v, data)).sort((a, b) => b.score - a.score || a.d - b.d);
   return list[0] || null;
+}
+
+// How good a free valley is for a new village: crop fields count most
+// (15 and 9 croppers feed an army), then oases close enough to take (within
+// 3 fields), then how near it is; big player villages next door count
+// against it. { ...valley, d, crop, oases, neighbours, score }.
+export function siteScore(site, v, data) {
+  const crop = Number(String(VALLEY_FIELDS[site.type] || '4-4-4-6').split('-')[3]);
+  const d = distance(site, v);
+  const near = (x, r) => Math.max(Math.abs(x.x - site.x), Math.abs(x.y - site.y)) <= r;
+  const oases = Object.values(data.oases || {}).filter((o) => !o.notOasis && !o.owned && near(o, 3)).length;
+  const ownIds = new Set(Object.values(data.villages || {}).map((x) => `${x.x}|${x.y}`));
+  const big = Object.values(data.mapVillages || {}).filter((x) => !ownIds.has(`${x.x}|${x.y}`) && near(x, 7) && (x.pop || 0) >= 250);
+  const neighbours = big.length;
+  const cropScore = { 15: 30, 9: 18, 7: 6 }[crop] || 0;
+  const score = cropScore + Math.min(oases, 3) * 4 - d - big.reduce((n, x) => n + ((x.pop || 0) >= 500 ? 5 : 2), 0);
+  return { ...site, d, crop, oases, neighbours, score };
 }
 
 // The plan for every village: its step, what the autopilot or the bot

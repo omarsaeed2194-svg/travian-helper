@@ -6,6 +6,7 @@ import { command, esc, editingIn } from '../src/ui.js';
 import { brainPlan } from '../src/brain.js';
 import { buildingName, fmtDuration, fmtAgo, buildStatus, goalText } from '../src/shared.js';
 import { tribeBase } from '../src/units.js';
+import { attackVerdict, speedFactor } from '../src/attacks.js';
 import { t, coords } from '../src/i18n.js';
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +56,7 @@ function army(p) {
 
 function renderTable(now) {
   const plan = brainPlan(data, data.settings, now, tribeBase(data.villages));
+  const { factor } = speedFactor(data.account || {}, data.settings.server);
   const head = ['th.village', 'brain.th.role', 'brain.th.stage', 'brain.th.next', 'brain.th.build', 'brain.th.troops', 'brain.th.army', 'brain.th.defense', 'brain.th.last']
     .map((k) => `<th>${esc(t(k))}</th>`).join('');
   const roles = data.settings.brain.roles || {};
@@ -62,9 +64,14 @@ function renderTable(now) {
     const v = p.v;
     const st = buildStatus(v, { ...data, tasks: data.tasks || {} }, now);
     const last = v.brainLast ? `${esc(v.brainLast.list ? v.brainLast.unit : t('brain.lastTrained', { n: v.brainLast.n, u: v.brainLast.unit }))} <small class="muted">${esc(fmtAgo(v.brainLast.at, now))}</small>` : '<span class="muted">—</span>';
+    const verdict = v.underAttack ? attackVerdict(v, factor, now) : null;
+    const escapePlan = (data.escapes || []).find((x) => x.villageId === v.id);
     const def = !data.settings.brain.defense ? t('brain.def.off')
-      : (data.escapes || []).some((x) => x.villageId === v.id) ? t('brain.def.plan')
-        : v.underAttack ? t('brain.def.nothing') : t('brain.def.ready');
+      : verdict ? t(`brain.verdict.${verdict.small ? 'small' : verdict.worst}`)
+        : v.underAttack && !(v.incomingAt > now - 10 * 60000) ? t('brain.verdict.reading')
+          : escapePlan && escapePlan.enabled !== false ? t('brain.def.plan')
+            : v.underAttack ? t('brain.def.nothing') : t('brain.def.ready');
+    const coming = v.transferPending && v.transferPending.until > now ? t('brain.transferPending', { v: (data.villages[v.transferPending.from] || {}).name || '?' }) : '';
     return `<tr>
       <td>${v.underAttack ? '⚔ ' : ''}${esc(v.name)}<br><small class="muted">${coords(v.x, v.y)}</small></td>
       <td><select data-brain-role="${esc(v.id)}">${ROLES.map((r) => `<option value="${r}" ${(roles[v.id] || 'auto') === r ? 'selected' : ''}>${esc(r === 'auto' ? t('brain.role.autoIs', { role: t(`brain.role.${p.role}`) }) : t(`brain.role.${r}`))}</option>`).join('')}</select></td>
@@ -74,7 +81,7 @@ function renderTable(now) {
       <td class="small">${esc(decision(p, now))}</td>
       <td class="small pre">${esc(army(p))}</td>
       <td class="small">${esc(def)}</td>
-      <td class="small">${last}</td>
+      <td class="small">${last}${coming ? `<br><small class="muted">${esc(coming)}</small>` : ''}</td>
     </tr>`;
   }).join('');
   if (!editingIn($('brainTable'))) {

@@ -44,6 +44,8 @@
       const tt = url.searchParams.get('tt');
       if (gid === '16' && tt === '99') return 'farmlist';
       if (tt === '2' && (gid === '16' || url.searchParams.get('id') === '39')) return 'send';
+      if (tt === '1' && (gid === '16' || url.searchParams.get('id') === '39')) return 'rally';
+      if (gid === '17' && url.searchParams.get('t') === '5') return 'market';
       return 'build';
     }
     if (p.endsWith('/position_details.php')) return 'tile';
@@ -300,6 +302,70 @@
     };
   }
 
+  // "in 0:17:30 h" on a confirmation page: the travel time in seconds.
+  function travelSeconds(root) {
+    const el = qs(root, '.in .timer, div.in, td.in, .in');
+    if (!el) return null;
+    const v = el.getAttribute && el.getAttribute('value');
+    if (v != null && /^\d+$/.test(v)) return Number(v);
+    const m = plain(el.textContent).match(/(\d+):(\d{2}):(\d{2})/);
+    return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null;
+  }
+
+  const xyOf = (cell) => {
+    if (!cell) return null;
+    for (const a of qsa(cell, 'a[href*="karte.php"], a[href*="position_details.php"]')) {
+      const u = new URL(a.getAttribute('href') || '', 'https://x.invalid/');
+      if (u.searchParams.has('x')) return { x: num(u.searchParams.get('x')), y: num(u.searchParams.get('y')) };
+      const d = num(u.searchParams.get('d') || u.searchParams.get('mapId'));
+      if (d) return { x: ((d - 1) % 401) - 200, y: 200 - Math.floor((d - 1) / 401) };
+    }
+    const cx = qs(cell, '.coordinateX');
+    const cy = qs(cell, '.coordinateY');
+    return cx && cy ? { x: num(text(cx)), y: num(text(cy)) } : null;
+  };
+
+  // Rally point overview: one table per movement. Incoming attacks and raids
+  // ("inAttack", "inRaid") with the village they come from, the time left,
+  // the attacker's tribe (its unit pictures) and, when the army is small
+  // enough for the rally point to tell, which kinds of units come ("?").
+  function parseIncoming(doc) {
+    const out = [];
+    for (const tb of qsa(doc, 'table.troop_details')) {
+      const cls = Array.from(tb.classList).find((c) => /^in(Attack|Raid)/.test(c));
+      if (!cls) continue;
+      const from = xyOf(qs(tb, 'td.role, th.role, .role'));
+      const timer = qs(qs(tb, 'tbody.infos') || tb, '.timer');
+      const img = qs(tb, 'img.unit');
+      const unitNo = img ? num((Array.from(img.classList).find((c) => /^u\d+$/.test(c)) || '')) : null;
+      const cells = qsa(qs(tb, 'tbody.units.last') || qsa(tb, 'tbody.units').pop(), 'td.unit, td');
+      const seen = cells.map((td, i) => (text(td) === '?' ? `t${i + 1}` : null)).filter(Boolean);
+      out.push({
+        kind: /Raid/.test(cls) ? 'raid' : 'attack',
+        from,
+        name: text(qs(qs(tb, '.role'), 'a')),
+        secondsLeft: timer ? num(timer.getAttribute('value')) : null,
+        base: unitNo ? Math.floor((unitNo - 1) / 10) * 10 : null,
+        seen,
+      });
+    }
+    return out;
+  }
+
+  // Marketplace, "send resources": free merchants, what one carries, and
+  // whether the form is there.
+  function parseMarket(doc) {
+    const avail = qs(doc, '.merchantsAvailable, .traderCount');
+    const m = avail ? plain(avail.textContent).match(/(\d+)\s*\/\s*(\d+)/) : null;
+    const cap = qs(doc, '#merchantCapacityValue, .merchantCarryInfo .value, .carry');
+    return {
+      form: !!qs(doc, '#r1, input[name="r1"]'),
+      free: m ? Number(m[1]) : avail ? num(text(avail)) : null,
+      total: m ? Number(m[2]) : null,
+      carry: cap ? num(text(cap)) : null,
+    };
+  }
+
   // Rally point "send troops": first a form, then a confirmation page.
   function parseSendPage(doc) {
     const inputs = qsa(doc, 'input[name^="troop["], input[name^="troops["]')
@@ -333,7 +399,7 @@
         if (cy) targets.push({ x: num(text(cx)), y: num(text(cy)) });
       }
       const ev = qs(doc, 'input[type="hidden"][name="eventType"], input[type="hidden"][name="c"]');
-      return { stage: 'confirm', targets, eventType: ev ? num(ev.value) : null, error };
+      return { stage: 'confirm', targets, eventType: ev ? num(ev.value) : null, error, seconds: travelSeconds(root) };
     }
     return { stage: 'other', error };
   }
@@ -685,6 +751,8 @@
     if (type === 'farmlist') out.farmLists = parseFarmLists(doc);
     if (type === 'tile') out.tile = parseTile(doc, url);
     if (type === 'send') out.sendPage = parseSendPage(doc);
+    if (type === 'rally') out.incoming = parseIncoming(doc);
+    if (type === 'market') out.market = parseMarket(doc);
     if (type === 'tasks') out.quests = parseQuests(doc);
     if (type === 'inventory') out.inventory = parseInventory(doc);
     if (type === 'reports') out.reports = parseReports(doc);
@@ -694,7 +762,7 @@
   const api = {
     num, parsePage, parseResources, parseVillages, parseBuildQueue, parseFields, parseBuildings, parseMovements,
     parseBuildPage, parseFarmLists, parseHero, pageType, parseTroops, parseTrainingQueue, parseTile, parseSendPage,
-    oasesFromTiles, villagesFromTiles, valleysFromTiles, tileSummary, findTiles, shapeOf, unitOf, parseNewBuildings, buildingNeeds, parseResearch, parseQuests, parseInventory, parseReports, parseExpansion,
+    oasesFromTiles, villagesFromTiles, valleysFromTiles, tileSummary, findTiles, shapeOf, unitOf, parseNewBuildings, buildingNeeds, parseResearch, parseIncoming, parseMarket, parseQuests, parseInventory, parseReports, parseExpansion,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TravianParser = api;

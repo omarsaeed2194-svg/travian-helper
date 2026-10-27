@@ -89,10 +89,14 @@ export const DEFAULT_SETTINGS = {
   // The brain (src/brain.js): runs every village on its own — builds like
   // the autopilot with field targets that grow with the village, trains
   // troops with `armyShare` % of what the stores pay for once they fill,
-  // and sends the attack units away from an attack (`defense`). At most
+  // and sends the attack units away from an attack (`defense`; a small one
+  // is met with help from nearby villages instead: `reinforce`). It sends
+  // resources to villages that wait for them (`transfers`). At most
   // `maxActions` trainings a round, every `everyMinutes` per village.
   // roles: { villageId: 'auto' | 'economy' | 'military' | 'off' }.
-  brain: { enabled: false, armyShare: 30, maxActions: 3, everyMinutes: 30, defense: true, roles: {} },
+  brain: { enabled: false, armyShare: 30, maxActions: 3, everyMinutes: 30, defense: true, reinforce: true, transfers: true, roles: {} },
+  // Dashboard: only the main pages, the brain's key switches on its page.
+  simpleMode: false,
 };
 
 export function mergeSettings(saved) {

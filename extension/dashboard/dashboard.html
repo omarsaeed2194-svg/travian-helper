@@ -18,6 +18,7 @@
     </div>
     <div class="tabs" id="tabs"></div>
     <div class="side-toggles">
+      <label class="switch"><input type="checkbox" data-setting="simpleMode"> <span data-i18n="toggle.simple"></span></label>
       <label class="switch"><input type="checkbox" data-setting="watchEnabled"> <span data-i18n="toggle.watch"></span></label>
       <label class="switch"><input type="checkbox" data-setting="botEnabled"> <span data-i18n="toggle.bot"></span></label>
       <label class="switch"><input type="checkbox" data-setting="autopilot.enabled"> <span data-i18n="toggle.autopilot"></span></label>
@@ -404,12 +405,26 @@
           <h2 data-i18n="brain.title"></h2>
           <p class="muted small" data-i18n="brain.help"></p>
           <label class="switch strong"><input type="checkbox" data-setting="brain.enabled"> <span data-i18n="brain.enable"></span></label>
+          <div class="simple-only quick">
+            <h3 data-i18n="simple.title"></h3>
+            <p class="muted small" data-i18n="simple.help"></p>
+            <label class="switch"><input type="checkbox" data-setting="watchEnabled"> <span data-i18n="toggle.watch"></span></label>
+            <label class="switch"><input type="checkbox" data-setting="pauseWhenPlaying"> <span data-i18n="settings.pause"></span></label>
+            <label class="switch"><input type="checkbox" data-setting="activeHours.enabled"> <span data-i18n="settings.activeHours"></span></label>
+            <div class="row indent"><input type="time" data-setting="activeHours.from"> <span data-i18n="settings.and"></span> <input type="time" data-setting="activeHours.to"></div>
+            <p class="muted small indent" data-i18n="simple.hoursHelp"></p>
+            <label class="switch"><input type="checkbox" data-setting="heal.enabled"> <span data-i18n="heal.enable"></span></label>
+          </div>
           <div class="row gap"><label><span data-i18n="brain.armyShare"></span> <input type="number" min="5" max="90" step="5" data-setting="brain.armyShare" class="num"> %</label></div>
           <p class="muted small indent" data-i18n="brain.armyShareHelp"></p>
           <div class="row"><label><span data-i18n="brain.maxActions"></span> <input type="number" min="1" max="10" data-setting="brain.maxActions" class="num"></label>
             <label><span data-i18n="brain.everyMinutes"></span> <input type="number" min="10" max="240" step="5" data-setting="brain.everyMinutes" class="num"></label></div>
           <label class="switch"><input type="checkbox" data-setting="brain.defense"> <span data-i18n="brain.defense"></span></label>
           <p class="muted small indent" data-i18n="brain.defenseHelp"></p>
+          <label class="switch"><input type="checkbox" data-setting="brain.reinforce"> <span data-i18n="brain.reinforce"></span></label>
+          <p class="muted small indent" data-i18n="brain.reinforceHelp"></p>
+          <label class="switch"><input type="checkbox" data-setting="brain.transfers"> <span data-i18n="brain.transfers"></span></label>
+          <p class="muted small indent" data-i18n="brain.transfersHelp"></p>
           <p class="muted small" data-i18n="brain.limits"></p>
           <p id="brainWarn" class="small warn" hidden></p>
         </div>

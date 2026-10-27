@@ -48,7 +48,9 @@ function renderExpansion(now) {
     const done = r.step === 'founded' || r.step === 'skipped';
     const set = done ? '—' : [r.settlers.home ? t('exp.home', { n: r.settlers.home }) : '', r.settlers.training ? t('exp.inTraining', { n: r.settlers.training }) : ''].filter(Boolean).join(' · ') || '—';
     const tg = r.target;
-    const where = tg ? `<span class="mono">${esc(coords(tg.x, tg.y))}</span> <small class="muted">${esc(tg.own ? t('exp.yours') : `${VALLEY_FIELDS[tg.type] || '?'} · ${t('exp.dist', { d: distance(tg, r.v).toFixed(1) })}`)}</small>
+    const why = tg && !tg.own ? [VALLEY_FIELDS[tg.type] || '?', t('exp.dist', { d: distance(tg, r.v).toFixed(1) }),
+      tg.oases ? t('exp.oasesNear', { n: tg.oases }) : '', tg.neighbours ? t('exp.bigNear', { n: tg.neighbours }) : ''].filter(Boolean).join(' · ') : '';
+    const where = tg ? `<span class="mono">${esc(coords(tg.x, tg.y))}</span> <small class="muted">${esc(tg.own ? t('exp.yours') : why)}</small>
       ${s.server ? ` <a href="${esc(`${s.server}/position_details.php?x=${tg.x}&y=${tg.y}`)}" target="_blank" rel="noopener">${esc(t('exp.openValley'))}</a>` : ''}` : '—';
     const btn = (label, patch) => `<button class="btn small" data-exp="${esc(r.id)}" data-patch='${esc(JSON.stringify(patch))}'>${esc(t(label))}</button>`;
     const actions = r.step === 'founded' ? btn('exp.undo', { founded: false, reset: true })

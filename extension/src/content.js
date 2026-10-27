@@ -255,6 +255,42 @@
       return { ok: true, navigating: true, sent, total };
     },
 
+    // Marketplace, "send resources": the four amounts and the target, then
+    // the game's check (it shows the trip, no new page), then send.
+    async sendResources({ x, y, amounts }) {
+      if (!Number.isInteger(x) || !Number.isInteger(y)) return { ok: false, code: 'badField' };
+      const inputs = ['r1', 'r2', 'r3', 'r4'].map((n) => document.getElementById(n) || document.querySelector(`input[name="${n}"]`));
+      if (inputs.some((i) => !i || i.disabled)) return { ok: false, code: 'noMarketForm' };
+      const xIn = document.querySelector('#xCoordInput, input[name="x"]');
+      const yIn = document.querySelector('#yCoordInput, input[name="y"]');
+      if (!xIn || !yIn) return { ok: false, code: 'noCoordInput' };
+      const order = ['wood', 'clay', 'iron', 'crop'];
+      for (const [i, input] of inputs.entries()) {
+        const n = Math.max(0, Math.floor(Number((amounts || {})[order[i]]) || 0));
+        setValue(input, n ? n : '');
+        await sleep(rand(150, 400));
+      }
+      setValue(xIn, x);
+      setValue(yIn, y);
+      await sleep(rand(300, 700));
+      const prepare = document.getElementById('enabledButton') || document.querySelector('#build form button.green.prepare, #build form button.green[type="submit"], #build button.green.send');
+      if (!usable(prepare)) return { ok: false, code: 'noPrepareButton' };
+      prepare.click();
+      const end = Date.now() + 8000;
+      for (;;) {
+        await sleep(300);
+        if (document.getElementById('target_validate')) break;
+        const err = document.querySelector('#prepareError, .prepareError');
+        if (err && err.textContent.trim()) return { ok: false, code: 'marketRefused', reason: err.textContent.trim().slice(0, 160) };
+        if (Date.now() > end) return { ok: false, code: 'noTripShown' };
+      }
+      await sleep(rand(500, 1100));
+      const send = document.getElementById('enabledButton') || document.querySelector('#build button.green.send, #build form button.green[type="submit"]');
+      if (!usable(send)) return { ok: false, code: 'noSendButton' };
+      setTimeout(() => send.click(), 50);
+      return { ok: true };
+    },
+
     // Academy / Smithy: the green button in the box of this unit.
     async research({ unit }) {
       if (!/^u\d+$/.test(String(unit || ''))) return { ok: false, code: 'badUnit' };

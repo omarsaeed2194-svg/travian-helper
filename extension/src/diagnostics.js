@@ -4,6 +4,7 @@
 // and recent errors. No passwords, tokens or keys. Pure.
 import { sortedVillages } from './shared.js';
 import { brainPlan } from './brain.js';
+import { attackVerdict, speedFactor } from './attacks.js';
 import { tribeBase } from './units.js';
 
 const ago = (at, now) => {
@@ -26,7 +27,7 @@ export function diagnosticsReport(data, env, now = Date.now()) {
   add(`Travian Helper diagnostics — ${clock(now)} UTC`);
   add(`Extension ${env.version} · ${env.browser} · UI ${s.language || '?'}`);
   add(`Server: ${s.server ? new URL(s.server).host : 'not detected'}`);
-  add(`Switches: watch ${onOff(s.watchEnabled)} · automate ${onOff(s.botEnabled)} · brain ${s.brain && s.brain.enabled ? `on (army ${s.brain.armyShare}%, ${s.brain.maxActions}/round, defence ${onOff(s.brain.defense)})` : 'off'} · autopilot ${onOff(ap.enabled)}`
+  add(`Switches: watch ${onOff(s.watchEnabled)} · automate ${onOff(s.botEnabled)} · brain ${s.brain && s.brain.enabled ? `on (army ${s.brain.armyShare}%, ${s.brain.maxActions}/round, defence ${onOff(s.brain.defense)}, help ${onOff(s.brain.reinforce)}, transfers ${onOff(s.brain.transfers)})` : 'off'} · autopilot ${onOff(ap.enabled)}`
     + ` (${['build', 'construct', 'adventures', 'farmLists', 'quests', 'heroBag'].filter((k) => ap[k]).join(', ') || '—'})`
     + ` · culture focus ${onOff(s.culture && s.culture.focus)} · celebrate ${(s.culture && s.culture.celebrate) || 'off'}`
     + ` · new villages ${onOff(s.expansion && s.expansion.enabled)} · heal ${onOff(s.heal && s.heal.enabled)}`
@@ -57,7 +58,8 @@ export function diagnosticsReport(data, env, now = Date.now()) {
   if (s.brain && s.brain.enabled) {
     add();
     const base = tribeBase(data.villages || {});
-    add(`Brain (tribe ${base ?? '?'}, requirements read from the game for ${Object.keys(acc.buildReqs || {}).length} buildings):`);
+    const sp = speedFactor(acc, s.server);
+    add(`Brain (tribe ${base ?? '?'}, requirements read from the game for ${Object.keys(acc.buildReqs || {}).length} buildings, troop speed ×${sp.factor} ${sp.measured ? `measured (${(acc.speedSamples || []).join(', ')})` : 'guessed'}):`);
     const g = (x) => (!x ? '—' : x.fields != null ? `fields ${x.fields}` : `g${x.gid} ${x.level}`);
     for (const p of brainPlan(data, s, now, base)) {
       const b = p.build;
@@ -66,6 +68,10 @@ export function diagnosticsReport(data, env, now = Date.now()) {
       const tr = p.train.skip ? p.train.skip : `${p.train.kind} in ${(p.train.builds || []).map((x) => `g${x.gid}`).join('+')} ${Math.round(p.train.share * 100)}%`;
       const rs = p.research.map((r) => `g${r.gid} ${r.field || (r.look ? 'look' : r.skip)}`).join(', ');
       add(`- ${p.v.name}: ${p.role}/${p.stage} · build ${step}${passed} · troops ${tr} · research ${rs}`);
+      const verdict = p.v.underAttack ? attackVerdict(p.v, sp.factor, now) : null;
+      if (p.v.underAttack) {
+        add(`    attacks: ${verdict ? `${verdict.worst}${verdict.small ? ' (small)' : ''} · ${verdict.attacks.map((a) => `${a.kind} from ${a.from ? `${a.from.x}|${a.from.y}` : '?'} d ${a.info.d != null ? a.info.d.toFixed(1) : '?'} speed ${a.info.vmin != null ? a.info.vmin.toFixed(1) : '?'}-${a.info.vmax != null ? a.info.vmax.toFixed(1) : '?'} slowest [${a.info.slowest.join(' ')}] seen [${(a.seen || []).join(' ')}]`).join('; ')}` : `rally point ${p.v.incomingAt ? `read ${ago(p.v.incomingAt, now)}, nothing listed` : 'not read'}`}`);
+      }
     }
   }
 

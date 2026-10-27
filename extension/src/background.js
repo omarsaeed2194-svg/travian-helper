@@ -13,6 +13,8 @@ import { savingFor, canAfford, CELEBRATIONS } from './culture.js';
 import { expansionPlan, settlerHome, foundedNow, SETTLERS } from './expansion.js';
 import { brainPlan, fieldTarget, defensePlan, unitPrefs, isOffensive, villageRole, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
 import { learnReqs } from './buildplan.js';
+import { mergeIncoming, attackVerdict, reinforcePlan, speedFactor, speedSample } from './attacks.js';
+import { transferPlan, fitMerchants } from './merchants.js';
 import { SNAPSHOT_KEYS, webBase, snapshotOf, hashOf, cleanRemote } from './web.js';
 import { firstAttack, escapeTiming, escapeDone, escapeDue, escapeTarget, escapeTroops, TOO_LATE_MS, donateTiming, donateDone, donateDue, donationAmounts, amountsText, sameAttack } from './escape.js';
 import { parseCommand, statusText, summaryText, helpText } from './telegram.js';
@@ -63,7 +65,7 @@ async function getSettings() {
 }
 
 // Failure text from the content script: a reason code, or a raw message.
-const reasonText = (res) => (res.code ? t(`reason.${res.code}`) : res.reason || '');
+const reasonText = (res) => (res.code ? t(`reason.${res.code}`, res) : res.reason || '');
 
 async function log(level, msg, villageId) {
   await update(['log', 'stats'], (d) => {
@@ -205,7 +207,7 @@ async function processPage(state, tabId) {
         // The battle may have left wounded: look at the Hospital soon.
         if (hospitalOf(v)) v.healAt = Math.min(v.healAt || Infinity, Date.now() + 3 * 60000);
       }
-      if (!vi.underAttack) v.incomingAttacks = 0;
+      if (!vi.underAttack) { v.incomingAttacks = 0; v.calmAt = now; v.incoming = []; }
     });
     if (listed.length) {
       const ids = new Set(listed.map((v) => v.id));
@@ -246,6 +248,8 @@ async function processPage(state, tabId) {
       if (state.fields) { levelUps(v.fields, state.fields); v.fields = state.fields; v.fieldsAt = now; }
       if (state.buildings) { levelUps(v.buildings, state.buildings); v.buildings = state.buildings; v.buildingsAt = now; }
       if (state.troops) { v.troops = state.troops; v.troopsAt = now; }
+      // Rally point: the attacks coming in, each keeping when it was first seen.
+      if (state.incoming) { v.incoming = mergeIncoming(v.incoming, state.incoming, now, v.attackAfter || null); v.incomingAt = now; }
       if (state.buildPage) {
         const bp = state.buildPage;
         const slotBuilding = (v.buildings || []).find((b) => b.slot === bp.slot);
@@ -284,10 +288,14 @@ async function processPage(state, tabId) {
           if (same) arriveAt = same.arriveAt;
           return { ...m, arriveAt };
         });
+        const prevAt = v.movementsAt;
         v.movementsAt = now;
         const incoming = v.movements.filter((m) => m.kind === 'att1');
         const count = incoming.reduce((n, m) => n + (m.count || 1), 0);
         if (count > (v.incomingAttacks || 0)) {
+          // The new attack left after the last look that didn't show it.
+          v.attackAfter = (v.incomingAttacks || 0) === 0 ? v.calmAt || null : prevAt || null;
+          v.incomingAt = 0; // read the rally point again
           const first = incoming.map((m) => m.arriveAt).filter(Boolean).sort((a, b) => a - b)[0];
           attackAlerts[v.id] = {
             villageId: v.id, kind: 'attacks', sticky: true,
@@ -380,7 +388,7 @@ async function processPage(state, tabId) {
   if (newlyAttacked.length) {
     // The brain makes its escape plan the moment the attack shows.
     const live = mergeSettings((await read(['settings'])).settings);
-    if (live.brain.enabled && live.brain.defense) await brainDefense(await read(['villages', 'escapes']));
+    if (live.brain.enabled && live.brain.defense) await brainDefense(await read(['villages', 'escapes', 'account', 'settings']));
     const { escapes = [] } = await read(['escapes']);
     if (escapes.some((p) => p.enabled !== false && newlyAttacked.includes(p.villageId))) {
       urgent = true;
@@ -660,7 +668,20 @@ const FATAL_SEND = new Set(['noCoordInput', 'noRaidOption', 'noReinforceOption',
 // Rally point → fill in `troops` for (x, y) → confirm. Returns { ok } or
 // { ok: false, reason, short?, fatal? }. `available` is what the form showed
 // before this send (troops at home that can actually leave).
-async function sendTroops(tabId, s, vid, { x, y, troops, mission = 'raid' }) {
+// The server's troop speed, from the trip times of the player's own sends.
+async function noteSpeed(vid, x, y, troops, seconds) {
+  await update(['villages', 'account'], (d) => {
+    const v = d.villages && d.villages[vid];
+    const f = v && speedSample(v, { x, y }, troops, tribeBase(d.villages), seconds);
+    if (!f) return;
+    d.account = d.account || {};
+    const list = [...(d.account.speedSamples || []), Math.round(f * 100) / 100].slice(-9);
+    d.account.speedSamples = list;
+    d.account.troopSpeed = [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+  });
+}
+
+async function sendTroops(tabId, s, vid, { x, y, troops, mission = 'raid', latestArrival = null }) {
   const form = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=16&tt=2`);
   const sp = form.sendPage;
   if (!sp || sp.stage !== 'form') return { ok: false, fatal: true, reason: t('reason.noSendForm') };
@@ -681,6 +702,12 @@ async function sendTroops(tabId, s, vid, { x, y, troops, mission = 'raid' }) {
   // The game shows the form again with its own message (beginner's
   // protection, no village there…): that target fails, others may not.
   if (!cp || cp.stage !== 'confirm') return { ok: false, available, reason: (cp && cp.error) || t('reason.noConfirmPage') };
+  // The trip's length measures the server's troop speed; a send that must
+  // land in time isn't confirmed when it wouldn't (or can't be told).
+  if (cp.seconds) await noteSpeed(vid, x, y, troops, cp.seconds);
+  if (latestArrival && !(cp.seconds && Date.now() + cp.seconds * 1000 <= latestArrival)) {
+    return { ok: false, tooLate: true, available, reason: t(cp.seconds ? 'reason.arrivesTooLate' : 'reason.noTravelTime') };
+  }
   const { res: res2, page: after } = await act(tabId, { kind: 'sendConfirm', x, y, mission }, true);
   if (!res2.ok) return { ok: false, available, reason: reasonText(res2) };
   if (after && after.sendPage && after.sendPage.stage === 'confirm') {
@@ -1243,6 +1270,81 @@ const JOBS = {
     await log('success', t(gid === SMITHY ? 'log.brainImproved' : 'log.brainResearched', { u: pick.name || pick.field, n: (pick.level || 0) + 1, b: bname }), vid);
     await bump('researched');
     await later(0.5);
+  },
+
+  // The brain looks at the incoming attacks in the rally point: where from,
+  // and (with the time it first saw them) how fast they can be.
+  async brainScout(tabId, job, s) {
+    const vid = job.villageId;
+    await patchVillage(vid, { scoutAt: Date.now() });
+    const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=16&tt=1&filter=1&subfilters=1`);
+    if (!page.incoming) throw new Error(t('err.noRallyList'));
+    if (!page.incoming.length) await patchVillage(vid, { incomingAt: Date.now() });
+    const data = await read(['villages', 'escapes', 'account', 'settings']);
+    await brainDefense(data);
+  },
+
+  // Help for a small attack: part of a nearby village's defence, only if it
+  // lands before the attack does.
+  async brainReinforce(tabId, job, s) {
+    const { villages = {} } = await read(['villages']);
+    const from = villages[job.villageId];
+    const to = villages[job.targetId];
+    if (!from || !to || !to.underAttack) return;
+    await update(['villages'], (d) => {
+      const x = d.villages && d.villages[from.id];
+      if (x) x.reinforceSent = { ...(x.reinforceSent || {}), [to.id]: job.attackAt };
+    });
+    const want = job.troops;
+    const r = await sendTroops(tabId, s, from.id, {
+      x: to.x, y: to.y, mission: 'reinforce', latestArrival: job.latestArrival,
+      troops: (available) => Object.fromEntries(Object.entries(want).map(([f, n]) => [f, Math.min(n, available[f] ?? n)]).filter(([, n]) => n > 0)),
+    });
+    if (!r.ok) {
+      await log('info', t('log.brainHelpNot', { from: from.name, to: to.name, reason: r.reason || '' }), from.id);
+      return;
+    }
+    const nameOf = (f) => ((from.troops || []).find((x) => unitField(x.unit) === f) || {}).name || f;
+    const what = Object.entries(r.sent).map(([f, n]) => `${n} ${nameOf(f)}`).join(t('list.sep'));
+    await log('success', t('log.brainHelp', { from: from.name, to: to.name, what }), to.id);
+  },
+
+  // Resources from a village with plenty to one that waits to build (or is
+  // nearly empty), with the marketplace's merchants.
+  async brainTransfer(tabId, job, s) {
+    const { villages = {} } = await read(['villages']);
+    const from = villages[job.villageId];
+    const to = villages[job.targetId];
+    if (!from || !to) return;
+    await patchVillage(from.id, { transferAt: Date.now() + jittered(20 * 60000, s.jitterPercent) });
+    const url = `${s.server}/build.php?newdid=${encodeURIComponent(from.id)}&gid=17&t=5`;
+    const page = await navigate(tabId, url);
+    const m = page.market;
+    if (!m || !m.form) {
+      await patchVillage(from.id, { transferAt: Date.now() + 12 * 3600000 });
+      await log('info', t('log.brainMarketUnread'), from.id);
+      return;
+    }
+    if (m.free === 0) {
+      await patchVillage(from.id, { transferAt: Date.now() + 30 * 60000 });
+      await log('info', t('log.brainNoMerchants', { v: from.name }), from.id);
+      return;
+    }
+    const amounts = fitMerchants(job.amounts, m.free, m.carry);
+    if (!amounts) return;
+    const { res } = await act(tabId, { kind: 'sendResources', x: to.x, y: to.y, amounts }, false);
+    if (!res.ok) throw new Error(reasonText(res));
+    // Sent? The page shows fewer free merchants afterwards.
+    await sleep(rand(1500, 3000));
+    const after = await navigate(tabId, url);
+    const freeNow = after.market ? after.market.free : null;
+    if (m.free != null && freeNow != null && freeNow >= m.free) {
+      await log('error', t('log.brainTransferUnconfirmed', { from: from.name, to: to.name }), from.id);
+      return;
+    }
+    await patchVillage(to.id, { transferPending: { at: Date.now(), until: Date.now() + 2 * 3600000, from: from.id, amounts } });
+    await log('success', t('log.brainTransfer', { what: amountsText(amounts), from: from.name, to: to.name, why: t(`brain.transferWhy.${job.why}`) }), to.id);
+    await bump('transfers');
   },
 
   // Hospital: heal every wounded unit the resources pay for.
@@ -1823,6 +1925,32 @@ function planActions(s, data, now) {
 
 const jobKey = (job) => `${job.type}:${job.villageId || job.listId || (job.rule && job.rule.id) || ''}`;
 
+// The brain under attack: read the rally point (where from, how fast),
+// then help from nearby villages when the attack is small. First in a
+// round: it can't wait for the building.
+function brainDefenseJobs(s, data, now) {
+  const { villages = {}, account = {} } = data;
+  const jobs = [];
+  if (!s.brain.enabled || !s.brain.defense) return jobs;
+  const base = tribeBase(villages);
+  const { factor } = speedFactor(account, s.server);
+  for (const v of sortedVillages(villages)) {
+    if (!v.underAttack) continue;
+    if (!(v.incomingAt > now - 10 * 60000) && !((v.scoutAt || 0) > now - 3 * 60000)) {
+      jobs.push({ type: 'brainScout', villageId: v.id, label: t('job.brainScout', { v: v.name }) });
+      continue;
+    }
+    const verdict = s.brain.reinforce ? attackVerdict(v, factor, now) : null;
+    if (!verdict || !verdict.reinforce) continue;
+    for (const h of reinforcePlan(v, villages, base).slice(0, 3)) {
+      if (((villages[h.from].reinforceSent || {})[v.id] || 0) === verdict.first) continue;
+      jobs.push({ type: 'brainReinforce', villageId: h.from, targetId: v.id, troops: h.troops, attackAt: verdict.first, latestArrival: verdict.first - 60000,
+        label: t('job.brainReinforce', { from: villages[h.from].name, to: v.name }) });
+    }
+  }
+  return jobs;
+}
+
 function planAutomation(s, data, now, jobs) {
   const { villages = {}, tasks = {}, training = [], raids = [], farms = [], schedule = {}, account = {} } = data;
   const farmNow = new Set(schedule.farmNow || []);
@@ -1830,6 +1958,7 @@ function planAutomation(s, data, now, jobs) {
   // (farm lists stay the player's own choice: they attack players).
   const ap = s.brain.enabled ? { ...s.autopilot, enabled: true, build: true, construct: true, adventures: true, quests: true } : s.autopilot;
   const auto = ap.enabled;
+  jobs.push(...brainDefenseJobs(s, data, now));
   if (schedule.finderVillage && villages[schedule.finderVillage] && schedule.scanVillage !== schedule.finderVillage && now >= (schedule.finderScanAt || 0)) {
     jobs.push({ type: 'scan', villageId: schedule.finderVillage, label: t('job.scan', { v: villages[schedule.finderVillage].name }) });
   }
@@ -1878,8 +2007,17 @@ function planAutomation(s, data, now, jobs) {
   if (auto && ap.quests && account.questClaimable && now >= (schedule.questAt || 0)) jobs.push({ type: 'quest', label: t('job.quest') });
   // The brain's troops: a few villages a round, each every so often.
   if (s.brain.enabled) {
+    const base = tribeBase(villages);
     let n = 0;
-    const thinking = brainPlan({ ...data, settings: s }, s, now, tribeBase(villages));
+    // Resources to where they are needed: one transfer a round.
+    if (s.brain.transfers) {
+      const tr = transferPlan(villages, now)[0];
+      if (tr) {
+        jobs.push({ type: 'brainTransfer', villageId: tr.from, targetId: tr.to, amounts: tr.amounts, why: tr.why, label: t('job.brainTransfer', { from: villages[tr.from].name, to: villages[tr.to].name }) });
+        n += 1;
+      }
+    }
+    const thinking = brainPlan({ ...data, settings: s }, s, now, base);
     for (const p of thinking) {
       if (n >= s.brain.maxActions) break;
       if (!p.train || p.train.skip || (p.v.brainTrainAt || 0) > now) continue;
@@ -1986,7 +2124,7 @@ async function runJobs(tabId, jobs, s, force) {
   return true;
 }
 
-const DATA_KEYS = ['settings', 'villages', 'tasks', 'training', 'raids', 'farms', 'escapes', 'schedule', 'account', 'status', 'expansion', 'valleys', 'mapVillages'];
+const DATA_KEYS = ['settings', 'villages', 'tasks', 'training', 'raids', 'farms', 'escapes', 'schedule', 'account', 'status', 'expansion', 'valleys', 'mapVillages', 'oases'];
 let running = false;
 let rerunForced = false; // "Check now" pressed while a run was in progress
 let rerunSoon = false;   // a dashboard request (e.g. map scan) arrived during a run
@@ -1994,19 +2132,41 @@ let rerunSoon = false;   // a dashboard request (e.g. map scan) arrived during a
 // that moves its attack units (and the hero) out; the defence stays.
 async function brainDefense(data) {
   const base = tribeBase(data.villages || {});
+  const s = mergeSettings(data.settings);
+  const { factor } = speedFactor(data.account || {}, s.server);
+  const now = Date.now();
   const add = [];
+  const toggle = {};
+  const notes = [];
   for (const v of Object.values(data.villages || {})) {
-    if ((data.escapes || []).some((p) => p.villageId === v.id)) continue;
-    const plan = defensePlan(v, base);
-    if (plan) add.push({ ...plan, id: uid() });
+    // With the rally point read: small attacks are met with help instead.
+    const verdict = attackVerdict(v, factor, now);
+    const plan = (data.escapes || []).find((p) => p.villageId === v.id);
+    if (verdict) {
+      const key = `${verdict.first}:${verdict.attacks.length}:${verdict.worst}`;
+      if (v.verdictKey !== key) notes.push([v, verdict, key]);
+    }
+    if (plan) {
+      if (plan.brain && verdict) toggle[plan.id] = verdict.escape;
+      continue;
+    }
+    if (verdict && !verdict.escape) continue;
+    const p = defensePlan(v, base);
+    if (p) add.push({ ...p, id: uid() });
   }
-  if (!add.length) return;
-  await update(['escapes'], (d) => {
-    const have = new Set((d.escapes || []).map((p) => p.villageId));
-    d.escapes = [...(d.escapes || []), ...add.filter((p) => !have.has(p.villageId))];
-  });
-  data.escapes = (await read(['escapes'])).escapes || [];
+  if (add.length || Object.keys(toggle).length) {
+    await update(['escapes'], (d) => {
+      const have = new Set((d.escapes || []).map((p) => p.villageId));
+      d.escapes = [...(d.escapes || []), ...add.filter((p) => !have.has(p.villageId))];
+      for (const p of d.escapes) if (p.id in toggle) p.enabled = toggle[p.id];
+    });
+    data.escapes = (await read(['escapes'])).escapes || [];
+  }
   for (const p of add) await log('alert', t('log.brainDefense', { v: data.villages[p.villageId].name }), p.villageId);
+  for (const [v, verdict, key] of notes) {
+    await patchVillage(v.id, { verdictKey: key });
+    await log(verdict.small ? 'info' : 'alert', t(`log.brainVerdict.${verdict.worst}`, { v: v.name, n: verdict.attacks.length, t: fmtClock(verdict.first) }), v.id);
+  }
 }
 
 // The minute alarm during a long run: an escape that is due (or one whose

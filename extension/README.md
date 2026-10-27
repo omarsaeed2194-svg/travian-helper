@@ -73,6 +73,9 @@ you're away:
   own "max"), every hour (you choose) and a few minutes after an attack
   ends. The Troops & training page shows the wounded, those being healed and
   the next look. Not yet checked against a saved Hospital page.
+- **Simple mode** — a switch in the menu: only Overview, Brain, Defense,
+  Alerts, Settings and Health, with the brain's main switches (checks,
+  pause while you play, rest hours, healing) on its page.
 - **Brain** (page *Brain*) — runs every village by itself, free and inside
   the extension (nothing is sent anywhere). It gives each village a role
   (economy, or the army village: with three villages or more, the one making
@@ -90,8 +93,21 @@ you're away:
   units in the army village, which trains earlier and spends twice the
   share), never more than the crop can feed, and when an attack comes it
   makes an escape plan that moves only the attack units and the hero, while
-  the defence stays. Its limits: no gold, no attacks on players (farm lists
-  stay your own switch), at most a few trainings and researches a round.
+  the defence stays. Under attack it reads the rally point: where the attack
+  comes from and, with when it was first seen, how fast it can be — so
+  whether rams, catapults or a chief can be in it, or only fast riders. When
+  the attack is small (the rally point shows its kinds of units), half the
+  defence of nearby villages comes over instead — only if the trip time on
+  the confirmation page shows it lands in time — and the attack units stay
+  home to fight; bigger or unknown attacks keep the escape plan. Those trip
+  times also measure the server's troop speed. It also sends resources
+  between villages with the marketplace *(experimental: the "send
+  resources" page hasn't been checked against a saved page)*: a village
+  waiting to build gets what it lacks from the nearest one with plenty
+  (each sender keeps 40 %), and the fields it raises first among equals are
+  those of the resource the next buildings need most. Its limits: no gold,
+  no attacks on players (farm lists stay your own switch), at most a few
+  trainings, researches and transfers a round.
   Every decision, the next building step and the goal it serves are on its
   page; you can set a village's role by hand.
 - **Autopilot** — one switch for when you're away. When a village's build
@@ -126,7 +142,9 @@ you're away:
   autopilot builds the Residence (Main Building to 5 first), automation
   trains the settlers when a slot is free or 85 % there, and you get an alert
   when they are home, with where to found: your own list of places, or the
-  nearest free valley the map showed (with its field layout). Sending them
+  best free valley the map showed — crop fields count most (15 and 9
+  croppers), then free oases within 3 fields, then nearness; big player
+  villages next door count against it (its layout and why are shown). Sending them
   stays with you: open the valley in the game and press "Found new village".
   The extension notices the founding, and the new village is next. On the
   Culture page; the Residence's settler form and the valley layouts haven't
@@ -359,7 +377,9 @@ src/units.js           Unit kinds and their icons
 src/health.js          The Health page's report
 src/inactive.js        Inactive finder: population snapshots and verdicts
 src/reports.js         Raid reports matched to farms; pausing rules
-src/merchants.js       Resource balance suggestions between villages
+src/merchants.js       Resource balance between villages: suggestions, and the brain's transfers
+src/attacks.js         Incoming attacks: speed range, likely units, help or escape
+src/buildplan.js       The brain's build orders and prerequisites
 src/culture.js         Culture points: per-building values and costs, best picks, celebrations, pace
 src/expansion.js       New villages: who builds a Residence, trains settlers, where to found
 src/mapHook.js         On the map page only: passes on the map tiles the game loads

@@ -51,21 +51,24 @@ const RELATED = {
   health: ['log', 'settings'],
   log: ['health'],
 };
+// Simple mode: only the pages someone who lets the brain play needs.
+const SIMPLE = new Set(['overview', 'brain', 'defense', 'alerts', 'settings', 'health']);
 // Pages that moved: old links still land in the right place.
 const ALIASES = { raids: 'farms', escape: 'defense' };
 const label = (tab) => `<span class="nav-ic" aria-hidden="true">${ICONS[tab]}</span><span data-i18n="nav.${tab}"></span>`;
+const simpleAttr = (tab) => (SIMPLE.has(tab) ? ' data-simple' : '');
 
 function buildNav() {
   $('tabs').innerHTML = NAV.map((g) => `<div class="nav-group" role="group"${g.group ? ` aria-labelledby="ng-${g.tabs[0]}"` : ''}>
       ${g.group ? `<span class="nav-label" id="ng-${g.tabs[0]}" data-i18n="${g.group}"></span>` : ''}
-      ${g.tabs.map((tab) => `<a href="#${tab}" data-tab="${tab}">${label(tab)}</a>`).join('')}
+      ${g.tabs.map((tab) => `<a href="#${tab}" data-tab="${tab}"${simpleAttr(tab)}>${label(tab)}</a>`).join('')}
     </div>`).join('');
   for (const [tab, list] of Object.entries(RELATED)) {
     const head = document.createElement('header');
     head.className = 'page-head';
     head.innerHTML = `<h1>${label(tab)}</h1>
       <div class="related"><span class="muted small" data-i18n="nav.related"></span>
-        ${list.map((x) => `<a href="#${x}" class="chip-link">${label(x)}</a>`).join('')}</div>`;
+        ${list.map((x) => `<a href="#${x}" class="chip-link"${simpleAttr(x)}>${label(x)}</a>`).join('')}</div>`;
     $(`tab-${tab}`).prepend(head);
   }
   for (const a of document.querySelectorAll('[data-goto]')) a.innerHTML = `<span data-i18n="nav.${a.dataset.goto}"></span><span class="goto-arrow" aria-hidden="true"></span>`;
@@ -522,6 +525,7 @@ function render() {
     fillSelect($('tgSummaryHour'), [[-1, t('tg.summaryOff')], ...Array.from({ length: 24 }, (_, h) => [h, `${String(h).padStart(2, '0')}:00`])]);
     revealActive();
   }
+  document.body.classList.toggle('simple', !!data.settings.simpleMode);
   $('server').textContent = data.settings.server ? new URL(data.settings.server).host : t('server.none');
   $('version').textContent = t('app.version', { v: chrome.runtime.getManifest().version });
   const theme = data.settings.theme || 'system';
