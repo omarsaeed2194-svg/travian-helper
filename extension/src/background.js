@@ -6,12 +6,12 @@ import {
   buildBlock, fmtNum, hospitalOf, goalText,
 } from './shared.js';
 import { pickAutoUpgrade, unitField, troopsHome, raidTargets, oasisKey, farmTargets, coversTroops, cleanTroops, buildCategory, bagShortfall, distance, MAP_EDGE } from './autopilot.js';
-import { tribeBase } from './units.js';
+import { tribeBase, unitKind } from './units.js';
 import { recordMapVillages } from './inactive.js';
 import { applyReports } from './reports.js';
 import { savingFor, canAfford, CELEBRATIONS } from './culture.js';
 import { expansionPlan, settlerHome, foundedNow, SETTLERS } from './expansion.js';
-import { brainPlan, fieldTarget, defensePlan, unitPrefs, isOffensive, villageRole, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
+import { brainPlan, fieldTarget, defensePlan, unitPrefs, armyUnit, villageRole, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
 import { learnReqs } from './buildplan.js';
 import { mergeIncoming, attackVerdict, reinforcePlan, speedFactor, speedSample } from './attacks.js';
 import { transferPlan, fitMerchants } from './merchants.js';
@@ -198,6 +198,7 @@ async function processPage(state, tabId) {
       const wasAttacked = !!v.underAttack;
       Object.assign(v, { name: vi.name, x: vi.x, y: vi.y, order, underAttack: vi.underAttack });
       if (vi.underAttack && !wasAttacked) {
+        v.attackSince = now;
         v.needsRefresh = true; // fetch arrival times on the next tick
         newlyAttacked.push(vi.id);
         attackAlerts[vi.id] = { villageId: vi.id, kind: 'attacks', sticky: true, title: t('alert.attack.title', { v: vi.name }), body: t('alert.attack.body', { xy: coords(vi.x, vi.y) }) };
@@ -213,6 +214,13 @@ async function processPage(state, tabId) {
       const ids = new Set(listed.map((v) => v.id));
       for (const id of Object.keys(d.villages)) if (!ids.has(id)) delete d.villages[id];
       for (const id of Object.keys(d.history || {})) if (!ids.has(id)) delete d.history[id];
+    }
+
+    // The village the player has open in their own tab: chosen by them
+    // (the village list links say ?newdid=), not the one the bot switched to.
+    if (!fromWorker && tabId != null && state.villageId && d.villages[state.villageId]) {
+      const chosen = new URL(state.url).searchParams.has('newdid');
+      if (chosen || state.villageId !== botVillage || !d.status.userVillageId) d.status.userVillageId = state.villageId;
     }
 
     const v = state.villageId && d.villages[state.villageId];
@@ -469,10 +477,31 @@ async function armEscapesNow() {
 
 // Villages with an escape plan that are under attack but whose arrival time
 // isn't known (or is old): read their main page first.
+// Attacked villages whose arrival times the escape needs read now: a new
+// attack once; then, while no time is known, every 5 minutes — every 20
+// once a look after the attack began showed none (an attack on an oasis,
+// a timer that can't be read), and not at all while the player is playing
+// (each look switches the game to that village in their tab too).
 function escapeRefreshIds(data, now) {
-  const { villages = {}, escapes = [] } = data;
+  const { villages = {}, escapes = [], status = {}, settings = {} } = data;
+  const playing = settings.pauseWhenPlaying !== false && (status.userActiveUntil || 0) > now;
+  const wait = (v) => (v.movementsAt >= (v.attackSince || Infinity) ? 20 : 5) * 60000;
   return escapes.filter((p) => p.enabled !== false).map((p) => villages[p.villageId]).filter((v) => v && v.underAttack &&
-    (v.needsRefresh || (!firstAttack(v, now) && (!v.movementsAt || now - v.movementsAt > 5 * 60000)))).map((v) => v.id);
+    (v.needsRefresh || (!playing && !firstAttack(v, now) && (!v.movementsAt || now - v.movementsAt > wait(v))))).map((v) => v.id);
+}
+
+// After the bot's work, the player's tab is put back on their own village
+// (when they played in the last hours).
+async function restoreUserVillage(tabId, s) {
+  const { status = {}, villages = {} } = await read(['status', 'villages']);
+  const want = status.userVillageId;
+  if (!want || !villages[want] || !botVillage || botVillage === want) return;
+  if (!((status.userActiveUntil || 0) > Date.now() - 3 * 3600000)) return;
+  try {
+    await navigate(tabId, `${s.server}/dorf1.php?newdid=${encodeURIComponent(want)}`, 20000);
+  } catch (e) {
+    if (e.loggedOut) throw e;
+  }
 }
 
 function planEscapes(data, now) {
@@ -498,6 +527,7 @@ async function runEscapeStage(tabId, s) {
   const ids = escapeRefreshIds(data, Date.now());
   if (ids.length) await runJobs(tabId, [{ type: 'refresh', villageIds: ids, quick: true, label: t('job.refreshAttacked') }], s, true);
   data = await read(DATA_KEYS);
+  if (ids.length && s.brain.enabled && s.brain.defense) { await brainDefense(data); data = await read(DATA_KEYS); }
   const jobs = planEscapes(data, Date.now());
   // An "escape now" that no plan can use any more must not wait for a
   // later attack (it would send the troops off at once, lead time or not).
@@ -505,6 +535,7 @@ async function runEscapeStage(tabId, s) {
   const used = new Set(jobs.filter((j) => j.force).map((j) => (data.escapes || []).find((p) => p.id === j.planId)).filter(Boolean).map((p) => p.villageId));
   if (asked.some((id) => !used.has(id))) await update(['schedule'], (d) => { if (d.schedule) d.schedule.escapeNow = (d.schedule.escapeNow || []).filter((id) => used.has(id)); });
   if (jobs.length) await runJobs(tabId, jobs, s, true);
+  if (ids.length || jobs.length) await restoreUserVillage(tabId, s);
 }
 
 const troopsText = (v, troops) => {
@@ -548,8 +579,14 @@ function resolvePage(tabId, state) {
   w.resolve(state);
 }
 
+// The game keeps one active village per login: the bot's last ?newdid=
+// is also the one the player's own tab shows on its next click.
+let botVillage = null;
+
 async function navigate(tabId, url, timeout = PAGE_TIMEOUT_MS) {
   const page = waitForPage(tabId, timeout);
+  const did = new URL(url).searchParams.get('newdid');
+  if (did) botVillage = did;
   await chrome.tabs.update(tabId, { url });
   const state = await page;
   if (state.type === 'login') throw Object.assign(new Error(t('err.loggedOut')), { loggedOut: true });
@@ -1208,8 +1245,7 @@ const JOBS = {
       // What this building trains is known now: the role's units first; for
       // defence never an attack unit, and never chiefs or settlers.
       const prefs = unitPrefs(base, job.kind, b.gid);
-      const fits = (u) => u.field !== 't9' && u.field !== 't10' && (job.kind === 'off' || !isOffensive(u.field, base));
-      const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean), ...list.filter((u) => !prefs.includes(u.field) && fits(u))];
+      const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean), ...list.filter((u) => !prefs.includes(u.field) && armyUnit(u.field, base, job.kind) && unitKind(u.unit) !== 'scout')];
       const unit = order.find((u) => u.max > 0);
       if (!unit) {
         await log('info', t(list.length ? 'log.brainNoRes' : 'log.brainNoUnit', { b: bname }), vid);
@@ -1935,8 +1971,9 @@ function brainDefenseJobs(s, data, now) {
   const base = tribeBase(villages);
   const { factor } = speedFactor(account, s.server);
   for (const v of sortedVillages(villages)) {
-    if (!v.underAttack) continue;
-    if (!(v.incomingAt > now - 10 * 60000) && !((v.scoutAt || 0) > now - 3 * 60000)) {
+    if (!v.underAttack || !firstAttack(v, now)) continue;
+    // Once for each new attack (its first sight sets the speed range), then hourly.
+    if (!(v.incomingAt > now - 3600000) && !((v.scoutAt || 0) > now - 10 * 60000)) {
       jobs.push({ type: 'brainScout', villageId: v.id, label: t('job.brainScout', { v: v.name }) });
       continue;
     }
@@ -2146,11 +2183,15 @@ async function brainDefense(data) {
       const key = `${verdict.first}:${verdict.attacks.length}:${verdict.worst}`;
       if (v.verdictKey !== key) notes.push([v, verdict, key]);
     }
+    // Looked after the attack began and no attack on the village itself
+    // (an attack on its oasis): nothing to escape from.
+    const none = v.movementsAt >= (v.attackSince || Infinity) && !firstAttack(v, now);
     if (plan) {
-      if (plan.brain && verdict) toggle[plan.id] = verdict.escape;
+      if (plan.brain && (verdict || none)) toggle[plan.id] = verdict ? verdict.escape : false;
+      else if (plan.brain && plan.enabled === false && firstAttack(v, now) && !verdict) toggle[plan.id] = true;
       continue;
     }
-    if (verdict && !verdict.escape) continue;
+    if ((verdict && !verdict.escape) || none) continue;
     const p = defensePlan(v, base);
     if (p) add.push({ ...p, id: uid() });
   }
@@ -2215,7 +2256,11 @@ async function tick(force = false, soon = false) {
       // What the player just asked for from the dashboard (a map scan, a
       // farm list now) still runs.
       const asked = planActions(s, data, now).filter((j) => j.asked);
-      if (asked.length) await runJobs(await ensureWorkerTab(s.server), asked, s, true);
+      if (asked.length) {
+        const tab = await ensureWorkerTab(s.server);
+        await runJobs(tab, asked, s, true);
+        await restoreUserVillage(tab, s);
+      }
       await setStatus({ state: 'paused', note: '' });
       return {};
     }
@@ -2231,6 +2276,7 @@ async function tick(force = false, soon = false) {
       const fresh = await read(DATA_KEYS);
       await runJobs(tabId, planActions(s, fresh, Date.now()), s, force);
     }
+    await restoreUserVillage(tabId, s);
     await setStatus({ state: 'idle', note: '', lastRunAt: Date.now() });
     return {};
   } catch (e) {

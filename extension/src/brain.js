@@ -32,6 +32,10 @@ const OFFENSIVE = { 0: ['t3', 't5'], 10: ['t1', 't3', 't6'], 20: ['t2', 't4', 't
 const SIEGE = ['t7', 't8'];
 
 export const unitPrefs = (base, kind, gid) => ((UNITS[base] || UNITS[0])[kind] || {})[gid] || [];
+// A unit the brain may train for `kind` when its own picks aren't there:
+// no scouts, chiefs or settlers, and no attack units for defence.
+export const armyUnit = (field, base, kind) => field !== 't9' && field !== 't10' && fieldKind(field, base) !== 'scout' &&
+  (kind === 'off' || !isOffensive(field, base));
 export const isOffensive = (field, base) => SIEGE.includes(field) || (OFFENSIVE[base] || OFFENSIVE[0]).includes(field);
 
 const level = (v, gid) => Math.max(0, ...(v.buildings || []).filter((b) => b.gid === gid).map((b) => b.level || 0));
@@ -105,7 +109,9 @@ export function trainPick(v, role, base, s, now = Date.now()) {
     if (busyFor(v, gid, now) > 3600000) continue; // an hour of training already queued
     const known = ((v.units || {})[gid] || []).map((u) => u.field);
     const prefs = unitPrefs(base, kind, gid);
-    const fields = known.length ? [...prefs.filter((f) => known.includes(f)), ...known.filter((f) => !prefs.includes(f) && f !== 't10' && f !== 't9')] : prefs;
+    // Never scouts (the brain doesn't scout), chiefs or settlers; for
+    // defence never an attack unit.
+    const fields = known.length ? [...prefs.filter((f) => known.includes(f)), ...known.filter((f) => !prefs.includes(f) && armyUnit(f, base, kind))] : prefs;
     if (fields.length) builds.push({ gid, fields });
   }
   if (!builds.length) return { skip: level(v, BARRACKS) < 1 ? 'noBarracks' : 'queueFull' };
