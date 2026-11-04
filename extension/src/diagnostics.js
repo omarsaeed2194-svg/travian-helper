@@ -71,6 +71,9 @@ export function diagnosticsReport(data, env, now = Date.now()) {
       add(`- ${p.v.name}: ${p.role}/${p.stage} · build ${step}${passed} · troops ${tr} · research ${rs}`);
       const verdict = p.v.underAttack ? attackVerdict(p.v, sp.factor, now) : null;
       if (p.v.underAttack) {
+        const cc = p.v.clockCheck;
+        add(`    countdown: first attack ${(() => { const f = Math.min(...(p.v.movements || []).filter((m) => m.kind === 'att1' && m.arriveAt > now).map((m) => m.arriveAt)); return Number.isFinite(f) ? `in ${Math.round((f - now) / 1000)}s` : 'not known'; })()}`
+          + ` · last look ${ago(p.v.movementsAt, now)}${cc ? ` · checked ${ago(cc.at, now)}, off by ${Math.round(cc.diffMs / 1000)}s` : ''}`);
         add(`    attacks: ${verdict ? `${verdict.worst}${verdict.small ? ' (small)' : ''} · ${verdict.attacks.map((a) => `${a.kind} from ${a.from ? `${a.from.x}|${a.from.y}` : '?'} d ${a.info.d != null ? a.info.d.toFixed(1) : '?'} speed ${a.info.vmin != null ? a.info.vmin.toFixed(1) : '?'}-${a.info.vmax != null ? a.info.vmax.toFixed(1) : '?'} slowest [${a.info.slowest.join(' ')}] seen [${(a.seen || []).join(' ')}]`).join('; ')}` : `rally point ${p.v.incomingAt ? `read ${ago(p.v.incomingAt, now)}, nothing listed` : 'not read'}`}`);
       }
     }

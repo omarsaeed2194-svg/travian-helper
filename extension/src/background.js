@@ -296,6 +296,13 @@ async function processPage(state, tabId) {
         // Timers are whole seconds read at load time, so each read lands a
         // second or so off: keep the earlier time for the same movement.
         const prev = v.movements || [];
+        // The bot's own countdown against the game's timer: how far off it was.
+        const was = firstAttack({ movements: prev }, now);
+        const seen = state.movements.filter((m) => m.kind === 'att1' && m.secondsLeft != null).map((m) => now + m.secondsLeft * 1000);
+        if (was && seen.length) {
+          const diff = Math.min(...seen) - was;
+          if (Math.abs(diff) <= 60000) v.clockCheck = { at: now, diffMs: diff };
+        }
         v.movements = state.movements.map((m) => {
           let arriveAt = m.secondsLeft != null ? now + m.secondsLeft * 1000 : null;
           const same = arriveAt && prev.find((p) => p.kind === m.kind && p.arriveAt && Math.abs(p.arriveAt - arriveAt) <= 2500);
@@ -486,17 +493,25 @@ async function armEscapesNow() {
 
 // Villages with an escape plan that are under attack but whose arrival time
 // isn't known (or is old): read their main page first.
-// Attacked villages whose arrival times the escape needs read now: a new
-// attack once; then, while no time is known, every 5 minutes — every 20
-// once a look after the attack began showed none (an attack on an oasis,
-// a timer that can't be read), and not at all while the player is playing
-// (each look switches the game to that village in their tab too).
+// Attacked villages whose arrival times the escape needs read now. The
+// time is read once; from then on the bot counts down on its own clock
+// (the escape's alarm), with no looks at the village — each look switches
+// the game to that village in the player's tab too. It looks again: for a
+// new attack; once the countdown has run out while the village still shows
+// attacks (the game only tells the first arrival: the next one is read
+// then); and, while no time is known at all, every 5 minutes — every 20
+// once a look after the attack began showed none (an attack on an oasis, a
+// timer that can't be read) — but not while the player is playing.
 function escapeRefreshIds(data, now) {
   const { villages = {}, escapes = [], status = {}, settings = {} } = data;
   const playing = settings.pauseWhenPlaying !== false && (status.userActiveUntil || 0) > now;
   const wait = (v) => (v.movementsAt >= (v.attackSince || Infinity) ? 20 : 5) * 60000;
+  const ranOut = (v) => {
+    const past = (v.movements || []).filter((m) => m.kind === 'att1' && m.arriveAt && m.arriveAt <= now).map((m) => m.arriveAt);
+    return past.length > 0 && (v.movementsAt || 0) < Math.max(...past);
+  };
   return escapes.filter((p) => p.enabled !== false).map((p) => villages[p.villageId]).filter((v) => v && v.underAttack &&
-    (v.needsRefresh || (!playing && !firstAttack(v, now) && (!v.movementsAt || now - v.movementsAt > wait(v))))).map((v) => v.id);
+    (v.needsRefresh || (!firstAttack(v, now) && (ranOut(v) || (!playing && (!v.movementsAt || now - v.movementsAt > wait(v))))))).map((v) => v.id);
 }
 
 // After the bot's work, the player's tab is put back on their own village
@@ -2014,8 +2029,9 @@ function brainDefenseJobs(s, data, now) {
   const { factor } = speedFactor(account, s.server);
   for (const v of sortedVillages(villages)) {
     if (!v.underAttack || !firstAttack(v, now)) continue;
-    // Once for each new attack (its first sight sets the speed range), then hourly.
-    if (!(v.incomingAt > now - 3600000) && !((v.scoutAt || 0) > now - 10 * 60000)) {
+    // Once for each new attack (its first sight sets the speed range); the
+    // countdown needs no more looks.
+    if (!v.incomingAt && !((v.scoutAt || 0) > now - 10 * 60000)) {
       jobs.push({ type: 'brainScout', villageId: v.id, label: t('job.brainScout', { v: v.name }) });
       continue;
     }
@@ -2226,8 +2242,9 @@ async function brainDefense(data) {
       if (v.verdictKey !== key) notes.push([v, verdict, key]);
     }
     // Looked after the attack began and no attack on the village itself
-    // (an attack on its oasis): nothing to escape from.
-    const none = v.movementsAt >= (v.attackSince || Infinity) && !firstAttack(v, now);
+    // (an attack on its oasis): nothing to escape from. (An attack whose
+    // countdown ran out still counts: the next one is read then.)
+    const none = v.movementsAt >= (v.attackSince || Infinity) && !(v.movements || []).some((m) => m.kind === 'att1');
     if (plan) {
       if (plan.brain && (verdict || none)) toggle[plan.id] = verdict ? verdict.escape : false;
       else if (plan.brain && plan.enabled === false && firstAttack(v, now) && !verdict) toggle[plan.id] = true;

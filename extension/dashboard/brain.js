@@ -73,6 +73,9 @@ function renderTable(now) {
         : v.underAttack && !(v.incomingAt > now - 10 * 60000) ? t('brain.verdict.reading')
           : escapePlan && escapePlan.enabled !== false ? t('brain.def.plan')
             : v.underAttack ? t('brain.def.nothing') : t('brain.def.ready');
+    // The bot's own countdown to the first attack (read once from the game).
+    const first = v.underAttack ? Math.min(...(v.movements || []).filter((m) => m.kind === 'att1' && m.arriveAt > now).map((m) => m.arriveAt)) : Infinity;
+    const clock = Number.isFinite(first) ? t('brain.countdown', { t: fmtDuration(first - now) }) : '';
     const coming = v.transferPending && v.transferPending.until > now ? t('brain.transferPending', { v: (data.villages[v.transferPending.from] || {}).name || '?' }) : '';
     return `<tr>
       <td>${v.underAttack ? '⚔ ' : ''}${esc(v.name)}<br><small class="muted">${coords(v.x, v.y)}</small></td>
@@ -82,7 +85,7 @@ function renderTable(now) {
       <td class="small">${esc(p.role === 'off' ? t('brain.dec.off') : st ? st.text : '—')}</td>
       <td class="small">${esc(decision(p, now))}</td>
       <td class="small pre">${esc(army(p))}</td>
-      <td class="small">${esc(def)}</td>
+      <td class="small">${esc(def)}${clock ? `<br><small class="muted mono">${esc(clock)}</small>` : ''}</td>
       <td class="small">${last}${coming ? `<br><small class="muted">${esc(coming)}</small>` : ''}</td>
     </tr>`;
   }).join('');
