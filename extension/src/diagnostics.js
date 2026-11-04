@@ -65,7 +65,8 @@ export function diagnosticsReport(data, env, now = Date.now()) {
       const b = p.build;
       const step = b && b.step ? `g${b.step.gid}@${b.step.slot} → ${b.step.level + 1}${b.step.forGid ? ` for g${b.step.forGid} ${b.step.forLevel}` : ''} (goal ${g(b.goal)})` : 'nothing';
       const passed = b && b.passed.length ? ` · passed ${b.passed.slice(0, 4).map((x) => `${g(x.goal)}:${x.reason}`).join(', ')}` : '';
-      const tr = p.train.skip ? p.train.skip : `${p.train.kind} in ${(p.train.builds || []).map((x) => `g${x.gid}`).join('+')} ${Math.round(p.train.share * 100)}%`;
+      const tr = `${p.train.skip ? p.train.skip : `${p.train.kind} in ${(p.train.builds || []).map((x) => `g${x.gid}${x.left != null ? `(${x.left} left)` : ''}`).join('+')} ${Math.round(p.train.share * 100)}%`} · army ${p.train.pct ?? '?'}%`
+        + `${p.v.lanes ? ` · buildings' purse ${Object.values(p.v.lanes.build).join('/')}` : ''}`;
       const rs = p.research.map((r) => `g${r.gid} ${r.field || (r.look ? 'look' : r.skip)}`).join(', ');
       add(`- ${p.v.name}: ${p.role}/${p.stage} · build ${step}${passed} · troops ${tr} · research ${rs}`);
       const verdict = p.v.underAttack ? attackVerdict(p.v, sp.factor, now) : null;

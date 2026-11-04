@@ -11,10 +11,11 @@ import { recordMapVillages } from './inactive.js';
 import { applyReports } from './reports.js';
 import { savingFor, canAfford, CELEBRATIONS } from './culture.js';
 import { expansionPlan, settlerHome, foundedNow, SETTLERS } from './expansion.js';
-import { brainPlan, fieldTarget, defensePlan, unitPrefs, armyUnit, villageRole, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
+import { brainPlan, fieldTarget, defensePlan, unitPrefs, armyUnit, villageRole, villageStage, trainPick, brainBuilder, researchPick, upkeepOf, ACADEMY, SMITHY } from './brain.js';
 import { learnReqs } from './buildplan.js';
 import { mergeIncoming, attackVerdict, reinforcePlan, speedFactor, speedSample } from './attacks.js';
 import { transferPlan, fitMerchants } from './merchants.js';
+import { laneUpdate, armyPct, buildBudget, armyNow, peakUpdate } from './budget.js';
 import { SNAPSHOT_KEYS, webBase, snapshotOf, hashOf, cleanRemote } from './web.js';
 import { firstAttack, escapeTiming, escapeDone, escapeDue, escapeTarget, escapeTroops, TOO_LATE_MS, donateTiming, donateDone, donateDue, donationAmounts, amountsText, sameAttack } from './escape.js';
 import { parseCommand, statusText, summaryText, helpText } from './telegram.js';
@@ -228,6 +229,11 @@ async function processPage(state, tabId) {
       if (state.resources) {
         v.resources = state.resources;
         v.resourcesAt = now;
+        // The brain's split: the buildings' purse grows with its share of the income.
+        if (s.brain.enabled) {
+          const role = villageRole(v, sortedVillages(d.villages), s);
+          v.lanes = laneUpdate(v.lanes, state.resources, armyPct(v, role, s, villageStage(v)), now);
+        }
         // A point every few minutes, kept for a day, for the dashboard chart.
         const r = state.resources;
         d.history = d.history || {};
@@ -314,6 +320,9 @@ async function processPage(state, tabId) {
         v.incomingAttacks = count;
         v.needsRefresh = false;
       }
+      // Troops of each kind, keeping the highest count of the last hours
+      // (for troops out raiding) — the brain's targets count with it.
+      if (state.troops || (state.buildPage && state.buildPage.trainingQueue)) v.armyPeak = peakUpdate(v.armyPeak, armyNow(v, tribeBase(d.villages), now), now);
       v.updatedAt = now;
 
       if (state.resources && state.resources.production) {
@@ -1187,6 +1196,23 @@ const JOBS = {
       return;
     }
 
+    // The brain's split: the buildings' purse pays for this. Urgent picks
+    // (full stores, crop, a store too small) don't wait, nor a village whose
+    // army has nothing to spend on (targets reached, no barracks…).
+    if (task.auto && s.brain.enabled && bp.cost && !['storage', 'crop', 'storeShort'].includes(why)) {
+      const base = tribeBase(villages);
+      const role = villageRole(v, sortedVillages(villages), s);
+      const tp = trainPick(v, role, base, s, now);
+      const idle = ['targetsDone', 'noArmyShare', 'roleOff', 'noBarracks', 'economyFirst'].includes(tp.skip);
+      const budget = idle ? { ok: true } : buildBudget(v, bp.cost, now);
+      if (!budget.ok) {
+        const pct = armyPct(v, role, s, villageStage(v));
+        const quiet = (v.budgetLoggedAt || 0) > now - 3 * 3600000;
+        await patchVillage(vid, { buildWait: { reason: 'budget', at: now, until: now + budget.waitMs, cost: bp.cost, text: t('reason.budget', { pct: 100 - pct }) }, ...(quiet ? {} : { budgetLoggedAt: now }) });
+        if (!quiet) await log('info', t('log.brainBudget', { name: contract ? title : (bp.title || '').replace(/\s*\S*\s*\d+\s*$/, '') || title, pct: 100 - pct, t: fmtDuration(budget.waitMs) }), vid);
+        return;
+      }
+    }
     const { res, page: after } = await act(tabId, contract ? { kind: 'construct', gid: contract.gid } : { kind: 'upgrade' }, true);
     if (!res.ok || !after || after.type === 'build') {
       await patchVillage(vid, { buildWait: { reason: 'blocked', at: Date.now(), until: Date.now() + 5 * 60000, text: t('reason.stillOnBuild') } });
@@ -1201,6 +1227,13 @@ const JOBS = {
     else await log('success', t('log.upgrading', { name, n: bp.nextLevel ?? '?' }), vid);
     await bump('upgrades');
     await patchVillage(vid, { buildWait: null });
+    // Paid from the buildings' purse.
+    if (bp.cost) {
+      await update(['villages'], (d) => {
+        const x = d.villages && d.villages[vid];
+        if (x && x.lanes && x.lanes.build) for (const k of RESOURCES) x.lanes.build[k] = Math.max(0, (x.lanes.build[k] || 0) - (bp.cost[k] || 0));
+      });
+    }
     if (task.auto) return;
     await update(['tasks'], (d) => {
       const saved = ((d.tasks || {})[vid] || []).find((x) => x.id === task.id);
@@ -1237,21 +1270,30 @@ const JOBS = {
     const base = tribeBase(villages);
     let crop = job.crop;
     const done = [];
-    for (const [k, b] of (job.builds || [{ gid: job.gid }]).entries()) {
+    const builds = job.builds || [{ gid: job.gid }];
+    // The army's part of the stores, shared between the buildings: each
+    // one's slice of what is left when it trains.
+    const slice = (job.share || 0) / builds.length;
+    for (const [k, b] of builds.entries()) {
       if (k) await sleep(rand(1500, 3500));
       const page = await navigate(tabId, `${s.server}/build.php?newdid=${encodeURIComponent(vid)}&gid=${b.gid}`);
       const list = (page.buildPage && page.buildPage.trainable) || [];
       const bname = buildingName(b.gid);
-      // What this building trains is known now: the role's units first; for
-      // defence never an attack unit, and never chiefs or settlers.
-      const prefs = unitPrefs(base, job.kind, b.gid);
-      const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean), ...list.filter((u) => !prefs.includes(u.field) && armyUnit(u.field, base, job.kind) && unitKind(u.unit) !== 'scout')];
+      const kind = b.kind || job.kind;
+      // What this building trains is known now: the player's unit if they
+      // chose one; else the role's units first — for defence never an
+      // attack unit, and never scouts, chiefs or settlers.
+      const prefs = b.fields && b.fields.length ? b.fields : unitPrefs(base, kind, b.gid);
+      const order = [...prefs.map((f) => list.find((u) => u.field === f)).filter(Boolean),
+        ...(b.exact ? [] : list.filter((u) => !prefs.includes(u.field) && armyUnit(u.field, base, kind) && unitKind(u.unit) !== 'scout'))];
       const unit = order.find((u) => u.max > 0);
       if (!unit) {
-        await log('info', t(list.length ? 'log.brainNoRes' : 'log.brainNoUnit', { b: bname }), vid);
+        await log('info', t(b.exact && !order.length ? 'log.brainUnitMissing' : list.length ? 'log.brainNoRes' : 'log.brainNoUnit', { b: bname }), vid);
         continue;
       }
-      let amount = Math.max(1, Math.floor(unit.max * job.share));
+      let amount = Math.max(1, Math.floor(unit.max * Math.min(1, slice / Math.max(0.05, 1 - k * slice))));
+      // Never past the player's target.
+      if (b.left != null) amount = Math.min(amount, b.left);
       // Troops eat crop: keep the village's crop above zero.
       if (crop != null) {
         const each = upkeepOf(unit.field, base);

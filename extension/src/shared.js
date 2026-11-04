@@ -94,7 +94,9 @@ export const DEFAULT_SETTINGS = {
   // resources to villages that wait for them (`transfers`). At most
   // `maxActions` trainings a round, every `everyMinutes` per village.
   // roles: { villageId: 'auto' | 'economy' | 'military' | 'off' }.
-  brain: { enabled: false, armyShare: 30, maxActions: 3, everyMinutes: 30, defense: true, reinforce: true, transfers: true, roles: {} },
+  // villages: { villageId: { army: %, inf / cav / siege: troops wanted,
+  // infUnit / cavUnit / siegeUnit: 't1'… } } (src/budget.js).
+  brain: { enabled: false, armyShare: 30, maxActions: 3, everyMinutes: 30, defense: true, reinforce: true, transfers: true, roles: {}, villages: {} },
   // Dashboard: only the main pages, the brain's key switches on its page.
   simpleMode: false,
 };

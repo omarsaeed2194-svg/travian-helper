@@ -4,9 +4,11 @@
 // thinking.
 import { command, esc, editingIn } from '../src/ui.js';
 import { brainPlan } from '../src/brain.js';
-import { buildingName, fmtDuration, fmtAgo, buildStatus, goalText } from '../src/shared.js';
+import { buildingName, fmtDuration, fmtAgo, fmtNum, buildStatus, goalText } from '../src/shared.js';
 import { tribeBase } from '../src/units.js';
 import { attackVerdict, speedFactor } from '../src/attacks.js';
+import { armyPct, purses, targetsOf, villageCfg, KINDS } from '../src/budget.js';
+import { villageStage } from '../src/brain.js';
 import { t, coords } from '../src/i18n.js';
 
 const $ = (id) => document.getElementById(id);
@@ -89,6 +91,39 @@ function renderTable(now) {
   }
 }
 
+// Each village: its army share (the rest goes to buildings) and the troops
+// it should reach, with what it has now.
+const KIND_LIST = ['inf', 'cav', 'siege'];
+const sum = (o) => (o ? Object.values(o).reduce((n, x) => n + (x || 0), 0) : 0);
+function renderSplit(now) {
+  const s = data.settings;
+  const base = tribeBase(data.villages);
+  const plan = brainPlan(data, s, now, base);
+  const head = ['th.village', 'brain.split.army', 'brain.split.purses', ...KIND_LIST.map((k) => `brain.kind.${k}`)].map((k) => `<th>${esc(t(k))}</th>`).join('');
+  const rows = plan.map((p) => {
+    const v = p.v;
+    const cfg = villageCfg(s, v.id);
+    const auto = armyPct({ id: '__' }, p.role, s, villageStage(v));
+    const pu = purses(v, now);
+    const tg = targetsOf(v, s, base, now);
+    const cell = (k) => {
+      const units = KINDS[k].flatMap((g) => (v.units || {})[g] || []).filter((u, i, a) => a.findIndex((x) => x.field === u.field) === i);
+      const opts = [['', t('brain.split.unitAuto')], ...units.map((u) => [u.field, u.name || u.field])];
+      const have = tg[k] ? `<small class="${tg[k].left ? 'muted' : 'good-text'}">${esc(t('brain.split.have', { have: tg[k].have, want: tg[k].want }))}</small>` : '';
+      return `<td><input type="number" min="0" step="100" class="num" data-split="${esc(v.id)}" data-key="${k}" value="${esc(cfg[k] ?? '')}" placeholder="—">
+        <select data-split="${esc(v.id)}" data-key="${k}Unit">${opts.map(([f, n]) => `<option value="${esc(f)}" ${(cfg[`${k}Unit`] || '') === f ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select><br>${have}</td>`;
+    };
+    return `<tr>
+      <td>${esc(v.name)}<br><small class="muted">${esc(t(`brain.role.${p.role}`))}</small></td>
+      <td><input type="number" min="0" max="100" step="5" class="num" data-split="${esc(v.id)}" data-key="army" value="${esc(cfg.army ?? '')}" placeholder="${auto}"> %
+        <br><small class="muted">${esc(t('brain.split.rest', { b: 100 - armyPct(v, p.role, s, villageStage(v)) }))}</small></td>
+      <td class="small">${pu ? esc(t('brain.split.purseText', { a: fmtNum(sum(pu.army)), b: fmtNum(sum(pu.build)) })) : '—'}</td>
+      ${KIND_LIST.map(cell).join('')}
+    </tr>`;
+  }).join('');
+  if (!editingIn($('brainSplit'))) $('brainSplit').innerHTML = rows ? `<tr>${head}</tr>${rows}` : `<tr><td class="muted">${esc(t('build.noVillages'))}</td></tr>`;
+}
+
 function renderJournal() {
   const names = Object.fromEntries(Object.values(data.villages).map((v) => [v.id, v.name]));
   const items = (data.log || []).filter((e) => /^(العقل|Brain):/.test(e.msg)).slice(0, 25);
@@ -106,8 +141,26 @@ export function renderBrain(d, now) {
   $('brainWarn').hidden = !warns.length;
   $('brainWarn').textContent = warns.join(' ');
   renderTable(now);
+  renderSplit(now);
   renderJournal();
 }
+
+$('brainSplit').addEventListener('change', (e) => {
+  const id = e.target.dataset.split;
+  const key = e.target.dataset.key;
+  if (!id || !key) return;
+  const all = { ...(data.settings.brain.villages || {}) };
+  const cfg = { ...(all[id] || {}) };
+  let val = e.target.value;
+  if (e.target.type === 'number') {
+    val = String(val).trim() === '' ? null : Math.max(0, Math.floor(Number(val)) || 0);
+    if (key === 'army' && val != null) val = Math.min(100, val);
+  }
+  if (val === null || val === '') delete cfg[key]; else cfg[key] = val;
+  if (Object.keys(cfg).length) all[id] = cfg; else delete all[id];
+  data.settings = { ...data.settings, brain: { ...data.settings.brain, villages: all } };
+  command('saveSettings', { settings: { brain: { villages: all } } });
+});
 
 $('brainTable').addEventListener('change', (e) => {
   const id = e.target.dataset.brainRole;

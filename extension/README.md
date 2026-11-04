@@ -109,7 +109,14 @@ you're away:
   no attacks on players (farm lists stay your own switch), at most a few
   trainings, researches and transfers a round.
   Every decision, the next building step and the goal it serves are on its
-  page; you can set a village's role by hand.
+  page; you can set a village's role by hand. Per village you can also set
+  the **army share** (what part of its income goes to troops; the rest is
+  saved for its buildings — two purses inside the stores, so a building
+  waits for its own purse instead of eating the army's part) and **troop
+  targets** per kind (infantry, cavalry, siege, optionally which unit): the
+  brain trains until the village has them and stops (troops at home and in
+  training count; the highest count of the last 12 hours stands in for
+  troops out raiding).
 - **Autopilot** — one switch for when you're away. When a village's build
   queue is empty it picks the next upgrade itself (warehouse/granary when
   90% full → crop when the village is short of crop → Main Building up to the
@@ -380,6 +387,7 @@ src/reports.js         Raid reports matched to farms; pausing rules
 src/merchants.js       Resource balance between villages: suggestions, and the brain's transfers
 src/attacks.js         Incoming attacks: speed range, likely units, help or escape
 src/buildplan.js       The brain's build orders and prerequisites
+src/budget.js          Each village's army / buildings split and troop targets
 src/culture.js         Culture points: per-building values and costs, best picks, celebrations, pace
 src/expansion.js       New villages: who builds a Residence, trains settlers, where to found
 src/mapHook.js         On the map page only: passes on the map tiles the game loads

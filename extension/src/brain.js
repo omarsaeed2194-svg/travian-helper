@@ -9,9 +9,11 @@ import { RESOURCES, capacityFor, estimateStock, sortedVillages } from './shared.
 import { troopsHome, unitField } from './autopilot.js';
 import { nextBuild } from './buildplan.js';
 import { fieldKind } from './units.js';
+import { armyPct, armyRatio, targetsOf, KINDS } from './budget.js';
 
 export const BARRACKS = 19;
 export const STABLE = 20;
+export const WORKSHOP = 21;
 export const ACADEMY = 22;
 export const SMITHY = 13;
 const PALACE = 26;
@@ -83,43 +85,59 @@ const busyFor = (v, gid, now) => {
 const UPKEEP = { inf: 1, scout: 2, cav: 3, ram: 3, cat: 6 };
 export const upkeepOf = (field, base) => UPKEEP[fieldKind(field, base)] || 1;
 
-// Troops to train now, or why not: { builds: [{ gid, fields }], kind,
-// share, why, fill, crop } or { skip }. Defence while attacked or in
-// economy villages, attack units in the army village, in every training
-// building that has under an hour queued; only once the stores are filling
-// (the economy first) and never more than the crop can feed.
+// Troops to train now, or why not: { builds: [{ gid, fields, left, kind,
+// exact }], kind, share, why, pct, crop } or { skip }. The army's part of
+// the stores pays (the village's army % — see src/budget.js), in each
+// training building with under two hours queued; with targets set, only
+// the kinds still short of theirs, never past them. Defence in economy
+// villages and under attack, attack units in the army village, the
+// player's own unit where they chose one; never more than the crop feeds.
 export function trainPick(v, role, base, s, now = Date.now()) {
   if (role === 'off') return { skip: 'roleOff' };
   const fill = storageFill(v, now);
   if (fill == null) return { skip: 'noStock' };
   const attacked = !!v.underAttack;
   const stage = villageStage(v);
-  if (stage === 'start' && !attacked) return { skip: 'economyFirst' };
-  const military = role === 'military';
-  const want = military ? 0.3 : 0.6;
-  if (fill < want && !attacked) return { skip: 'saving', fill };
+  const pct = armyPct(v, role, s, stage);
+  const targets = targetsOf(v, s, base, now);
+  const aimed = Object.keys(targets).length > 0;
+  if (aimed && !attacked && Object.values(targets).every((x) => !x.left)) return { skip: 'targetsDone', pct, targets };
+  if (pct <= 0 && !attacked) return { skip: stage === 'start' ? 'economyFirst' : 'noArmyShare', pct };
+  const ratio = armyRatio(v, now);
+  const share = attacked ? Math.max(ratio ?? 0, pct / 100, 0.3) : ratio ?? pct / 100;
+  const est = estimateStock(v, now);
+  const sum = RESOURCES.reduce((n, k) => n + est[k], 0);
+  const cap = RESOURCES.reduce((n, k) => n + (capacityFor(v.resources, k) || 0), 0);
+  // Worth a batch once the army's part is 5 % of the stores' size.
+  if (!attacked && share * sum < 0.05 * cap) return { skip: 'saving', fill, pct };
   const prod = (v.resources && v.resources.production) || {};
   const crop = prod.crop != null ? prod.crop : null;
-  if (!attacked && crop != null && crop < 10) return { skip: 'cropLow', fill };
+  if (!attacked && crop != null && crop < 10) return { skip: 'cropLow', fill, pct };
+  const military = role === 'military';
   const kind = attacked || !military ? 'def' : 'off';
-  const order = military && kind === 'off' ? [STABLE, BARRACKS] : [BARRACKS, STABLE];
+  // Under attack: defence in barracks and stable, targets or not.
+  const short = aimed && !attacked;
+  const cats = short ? Object.keys(targets).filter((k) => targets[k].left > 0) : military && kind === 'off' ? ['cav', 'inf'] : ['inf', 'cav'];
   const builds = [];
-  for (const gid of order) {
+  for (const cat of cats) {
+    const gid = KINDS[cat][0];
     if (level(v, gid) < 1) continue;
-    if (busyFor(v, gid, now) > 3600000) continue; // an hour of training already queued
-    const known = ((v.units || {})[gid] || []).map((u) => u.field);
-    const prefs = unitPrefs(base, kind, gid);
-    // Never scouts (the brain doesn't scout), chiefs or settlers; for
-    // defence never an attack unit.
-    const fields = known.length ? [...prefs.filter((f) => known.includes(f)), ...known.filter((f) => !prefs.includes(f) && armyUnit(f, base, kind))] : prefs;
-    if (fields.length) builds.push({ gid, fields });
+    if (busyFor(v, gid, now) > 2 * 3600000) continue; // two hours of training already queued
+    const chosen = short && targets[cat].unit;
+    let fields;
+    if (chosen) fields = [chosen];
+    else {
+      const known = ((v.units || {})[gid] || []).map((u) => u.field);
+      const prefs = gid === WORKSHOP ? ['t7', 't8'] : unitPrefs(base, kind, gid);
+      // Never scouts (the brain doesn't scout), chiefs or settlers; for
+      // defence never an attack unit.
+      fields = known.length ? [...prefs.filter((f) => known.includes(f)), ...known.filter((f) => !prefs.includes(f) && armyUnit(f, base, gid === WORKSHOP ? 'off' : kind))] : prefs;
+    }
+    if (fields.length) builds.push({ gid, fields, left: short ? targets[cat].left : null, kind: gid === WORKSHOP ? 'off' : kind, exact: !!chosen });
   }
-  if (!builds.length) return { skip: level(v, BARRACKS) < 1 ? 'noBarracks' : 'queueFull' };
-  const why = attacked ? 'attacked' : military ? 'army' : 'storageFull';
-  const base100 = Math.max(5, Math.min(90, Number(s.brain.armyShare) || 30));
-  // The army village spends twice the share on troops.
-  const share = (military && !attacked ? Math.min(90, base100 * 2) : base100) / 100;
-  return { builds, gid: builds[0].gid, kind, share, why, fill, crop: attacked ? null : crop };
+  if (!builds.length) return { skip: level(v, BARRACKS) < 1 && !aimed ? 'noBarracks' : 'queueFull', pct };
+  const why = attacked ? 'attacked' : aimed ? 'target' : military ? 'army' : 'share';
+  return { builds, gid: builds[0].gid, kind, share, why, fill, pct, targets, crop: attacked ? null : crop };
 }
 
 // Units worth researching and improving: the role's own, best first
